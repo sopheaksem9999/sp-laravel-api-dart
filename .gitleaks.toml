@@ -1,0 +1,4 @@
+title = "sp_laravel_api gitleaks config"
+
+[extend]
+useDefault = true
