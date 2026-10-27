@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- **BREAKING (behaviour change):** `SpApi.request` now throws `SpApiError` (status stays the HTTP status, e.g. 200) when a response with status < 400 has a JSON map body with `success: false`. Error code 10002 on such a response is routed through `ApiAuth.handleUnauthorized()` and retried once, like a 401. Bytes responses and non-map bodies are unaffected. Opt out with `SpApi(treatSuccessFalseAsError: false)` to restore the 0.1.0 behaviour.
 - `SpApiError.retryAfter` now also reads `errors.retry_after_seconds` (first element, int or numeric string; zero or negative ignored) as a last fallback after the `Retry-After` header and body `retry_after`. The value remains in `fieldErrors`.
 - `SpApiError` now carries the transport `cause` and `stackTrace` (the originating `DioException`) for status 0 failures, plus `isTransport` / `isHttp` getters. `toString()` never prints the cause.
 

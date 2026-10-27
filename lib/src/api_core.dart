@@ -72,6 +72,11 @@ class SpApi {
   /// Automatic retry configuration for transient failures. Disabled by default.
   final RetryConfig? retry;
 
+  /// Whether a response with status < 400 whose JSON body is a map with
+  /// `success == false` is raised as [SpApiError]. Defaults to `true`.
+  /// Set to `false` to restore the 0.1.0 behaviour (response returned as is).
+  final bool treatSuccessFalseAsError;
+
   /// The underlying [Dio] HTTP client instance.
   final Dio dio;
 
@@ -82,6 +87,7 @@ class SpApi {
     this.tenant,
     this.rpcPrefix = 'rpc',
     this.retry,
+    this.treatSuccessFalseAsError = true,
     Dio? dio,
   }) : dio = dio ?? Dio();
 
@@ -225,6 +231,26 @@ class SpApi {
             continue;
           }
           throw SpApiError.fromResponse(res, tenantHeader: tenant?.header);
+        }
+
+        if (treatSuccessFalseAsError &&
+            reqOptions.responseType != ResponseType.bytes &&
+            res.data is Map &&
+            (res.data as Map)['success'] == false) {
+          final envelopeError = SpApiError.fromResponse(
+            res,
+            tenantHeader: tenant?.header,
+          );
+          if (envelopeError.errorCode == 10002 &&
+              auth != null &&
+              !authRefreshed) {
+            authRefreshed = true;
+            final recovered = await auth!.handleUnauthorized();
+            if (recovered) {
+              continue;
+            }
+          }
+          throw envelopeError;
         }
 
         return res;
