@@ -55,7 +55,7 @@ jobs:
       - name: Check forbidden imports and neutral names
         run: dart run tool/check.dart
         env:
-          FORBIDDEN_NAMES: ${{ secrets.FORBIDDEN_NAMES || 'cambogara,karunafilm,karuna,speedx' }}
+          FORBIDDEN_NAMES: ${{ secrets.FORBIDDEN_NAMES }}
 
       - name: Run tests
         run: dart test

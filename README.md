@@ -1,6 +1,10 @@
 # sp_laravel_api
 
-Typed REST client and multi-broadcaster realtime client for the SP Laravel backend packages (`sp-laravel-api`).
+Typed Dart & Flutter client service for the [`sopheak/sp-laravel-api`](https://packagist.org/packages/sopheak/sp-laravel-api) Laravel backend package.
+
+> [!IMPORTANT]
+> **Client Service Compatibility Notice:**  
+> `sp_laravel_api` is a client-side library and **works only with** backends running [`sopheak/sp-laravel-api`](https://packagist.org/packages/sopheak/sp-laravel-api). It provides strongly-typed Table Gateway CRUD operations, deterministic query serialization, REST modules (bulk, attachments, audit, permissions), and multi-broadcaster realtime event subscriptions (Laravel Reverb, Pusher, Soketi).
 
 ## Features
 
@@ -23,10 +27,17 @@ Add `sp_laravel_api` to your `pubspec.yaml`:
 
 ```yaml
 dependencies:
+  sp_laravel_api: ^0.1.0-beta.2
+```
+
+Or install from git:
+
+```yaml
+dependencies:
   sp_laravel_api:
     git:
       url: https://github.com/sopheaksem9999/sp-laravel-api-dart.git
-      ref: v0.1.0-beta.1
+      ref: v0.1.0-beta.2
 ```
 
 ## Quick Start

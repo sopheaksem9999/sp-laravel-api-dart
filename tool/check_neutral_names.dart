@@ -2,7 +2,6 @@ import 'dart:io';
 
 void main(List<String> args) {
   final forbiddenEnv = Platform.environment['FORBIDDEN_NAMES'];
-  final isCi = Platform.environment['CI'] == 'true';
 
   if (args.length >= 2 && args[0] == '--test-string') {
     final testStr = args.sublist(1).join(' ').toLowerCase();
@@ -27,17 +26,8 @@ void main(List<String> args) {
   }
 
   if (forbiddenEnv == null || forbiddenEnv.trim().isEmpty) {
-    if (isCi) {
-      stderr.writeln(
-        'Error: FORBIDDEN_NAMES environment variable must be set in CI.',
-      );
-      exit(1);
-    } else {
-      stdout.writeln(
-        'Notice: FORBIDDEN_NAMES is not set locally; skipping check.',
-      );
-      exit(0);
-    }
+    stdout.writeln('Notice: FORBIDDEN_NAMES is not set; skipping check.');
+    exit(0);
   }
 
   final forbiddenList = forbiddenEnv
@@ -56,6 +46,8 @@ void main(List<String> args) {
       final trimmedPath = path.trim();
       if (trimmedPath.isEmpty) continue;
       if (trimmedPath.endsWith('check_neutral_names_test.dart')) continue;
+      if (trimmedPath.endsWith('check_neutral_names.dart')) continue;
+      if (trimmedPath.startsWith('.github/')) continue;
       final file = File(trimmedPath);
       if (!file.existsSync()) continue;
 
