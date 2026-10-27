@@ -184,6 +184,7 @@ class SpApi {
 
     int retryCount = 0;
     bool authRefreshed = false;
+    var attempt = 0;
 
     for (;;) {
       if (cancelToken != null && cancelToken.isCancelled) {
@@ -217,10 +218,16 @@ class SpApi {
         headers: reqHeaders,
       );
 
+      // A FormData can be finalized only once; send a fresh clone of the
+      // original on every retry attempt.
+      final attemptData = data is FormData && attempt++ > 0
+          ? data.clone()
+          : data;
+
       try {
         final res = await dio.request<dynamic>(
           fullUrl,
-          data: data,
+          data: attemptData,
           queryParameters: queryParameters,
           options: reqOptions,
           cancelToken: cancelToken,
