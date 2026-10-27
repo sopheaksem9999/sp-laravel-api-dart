@@ -9,9 +9,7 @@ void main() {
     late Directory tempDir;
 
     setUp(() {
-      final fixtureFile = File(
-        '../sp-laravel-api-js/test/fixtures/openapi.sample.json',
-      );
+      final fixtureFile = File('test/fixtures/openapi.sample.json');
       if (!fixtureFile.existsSync()) {
         throw StateError('Fixture file not found: ${fixtureFile.path}');
       }
