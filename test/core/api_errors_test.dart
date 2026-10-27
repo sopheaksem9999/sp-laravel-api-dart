@@ -126,5 +126,93 @@ void main() {
       expect(error.tenantRequired, isTrue);
       expect(error.code, equals(SpApiErrorCode.tenantRequired));
     });
+
+    group('retry_after_seconds in errors (L3)', () {
+      SpApiError build(
+        dynamic errors, {
+        Map<String, List<String>>? headers,
+        Map<String, dynamic> extra = const {},
+      }) {
+        return SpApiError.fromResponse(
+          Response<dynamic>(
+            requestOptions: RequestOptions(path: '/api/v1/items'),
+            statusCode: 429,
+            headers: headers == null ? null : Headers.fromMap(headers),
+            data: {'message': 'Too Many Attempts.', 'errors': errors, ...extra},
+          ),
+        );
+      }
+
+      test('reads first element of errors.retry_after_seconds', () {
+        final error = build({
+          'retry_after_seconds': [3193],
+        });
+        expect(error.retryAfter, equals(3193));
+      });
+
+      test('Retry-After header wins over body sources', () {
+        final error = build(
+          {
+            'retry_after_seconds': [3193],
+          },
+          headers: {
+            'Retry-After': ['30'],
+          },
+          extra: {'retry_after': 60},
+        );
+        expect(error.retryAfter, equals(30));
+      });
+
+      test('body retry_after wins over errors.retry_after_seconds', () {
+        final error = build(
+          {
+            'retry_after_seconds': [3193],
+          },
+          extra: {'retry_after': 60},
+        );
+        expect(error.retryAfter, equals(60));
+      });
+
+      test('fieldErrors still contains retry_after_seconds', () {
+        final error = build({
+          'retry_after_seconds': [3193],
+        });
+        expect(error.fieldErrors['retry_after_seconds'], equals(['3193']));
+      });
+
+      test('parses numeric string element', () {
+        final error = build({
+          'retry_after_seconds': ['45'],
+        });
+        expect(error.retryAfter, equals(45));
+      });
+
+      test('bare int value is accepted', () {
+        final error = build({'retry_after_seconds': 3193});
+        expect(error.retryAfter, equals(3193));
+      });
+
+      test('empty list, non-numeric and zero/negative yield null', () {
+        expect(build({'retry_after_seconds': <int>[]}).retryAfter, isNull);
+        expect(
+          build({
+            'retry_after_seconds': ['abc'],
+          }).retryAfter,
+          isNull,
+        );
+        expect(
+          build({
+            'retry_after_seconds': [0],
+          }).retryAfter,
+          isNull,
+        );
+        expect(
+          build({
+            'retry_after_seconds': [-5],
+          }).retryAfter,
+          isNull,
+        );
+      });
+    });
   });
 }

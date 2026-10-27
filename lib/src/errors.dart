@@ -132,6 +132,16 @@ class SpApiError implements Exception {
       } else if (retryRaw is String) {
         retrySec ??= int.tryParse(retryRaw);
       }
+
+      // Laravel throttle responses may carry the wait inside `errors`.
+      if (rawErrors is Map<String, dynamic>) {
+        var raw = rawErrors['retry_after_seconds'];
+        if (raw is List) raw = raw.isEmpty ? null : raw.first;
+        final secs = raw is int
+            ? raw
+            : (raw is String ? int.tryParse(raw.trim()) : null);
+        if (secs != null && secs > 0) retrySec ??= secs;
+      }
     } else if (data is String) {
       if (!data.trim().startsWith('<')) {
         message = data.trim();

@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- `SpApiError.retryAfter` now also reads `errors.retry_after_seconds` (first element, int or numeric string; zero or negative ignored) as a last fallback after the `Retry-After` header and body `retry_after`. The value remains in `fieldErrors`.
 - `SpApiError` now carries the transport `cause` and `stackTrace` (the originating `DioException`) for status 0 failures, plus `isTransport` / `isHttp` getters. `toString()` never prints the cause.
 
 ## 0.1.0 (2026-10-27)
