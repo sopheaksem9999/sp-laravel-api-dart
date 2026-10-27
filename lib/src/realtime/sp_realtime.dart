@@ -64,6 +64,44 @@ class SpRealtime {
   Timer? _pongTimer;
   bool _isDisposed = false;
   bool _reconnecting = false;
+  DateTime? _pausedAt;
+  bool _isOffline = false;
+
+  /// Signals that the application or page has paused or moved to the background.
+  void onAppPaused() {
+    _pausedAt = DateTime.now();
+  }
+
+  /// Signals that the application or page has resumed to the foreground.
+  ///
+  /// Runs a health check and triggers immediate reconnect if stale or disconnected.
+  void onAppResumed({bool? forceStale}) {
+    final now = DateTime.now();
+    final wasStale =
+        forceStale ??
+        (_pausedAt != null &&
+            now.difference(_pausedAt!) > const Duration(seconds: 30));
+    _pausedAt = null;
+
+    if (!isConnected || wasStale || !isHealthy) {
+      if (!_isOffline) {
+        connect();
+      }
+    }
+  }
+
+  /// Signals network connectivity transitions.
+  ///
+  /// When [online] is false, suspends reconnect attempts to conserve resources.
+  /// When [online] is true, triggers an immediate reconnect attempt if disconnected.
+  void onNetworkChanged(bool online) {
+    _isOffline = !online;
+    if (online) {
+      if (!isConnected) {
+        connect();
+      }
+    }
+  }
 
   /// Creates a new [SpRealtime] instance.
   SpRealtime({
