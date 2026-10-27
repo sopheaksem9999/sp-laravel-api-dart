@@ -63,6 +63,31 @@ void main() {
       );
     });
 
+    test('envelope error_code maps to a typed code', () async {
+      const mapping = {
+        10002: SpApiErrorCode.unauthenticated,
+        10008: SpApiErrorCode.forbidden,
+        10009: SpApiErrorCode.notFound,
+        10004: SpApiErrorCode.validation,
+        10010: SpApiErrorCode.server,
+        5: SpApiErrorCode.unknown,
+      };
+      for (final entry in mapping.entries) {
+        final h = _Harness([
+          {'success': false, 'error_code': entry.key, 'message': 'x'},
+        ]);
+        await expectLater(
+          h.api(withAuth: false).request('GET', 'a'),
+          throwsA(
+            isA<SpApiError>()
+                .having((e) => e.status, 'status', 200)
+                .having((e) => e.code, 'code ${entry.key}', entry.value),
+          ),
+          reason: 'error_code ${entry.key}',
+        );
+      }
+    });
+
     test('10002 refreshes once and returns the retried result', () async {
       final h = _Harness([
         _unauth,
@@ -123,6 +148,20 @@ void main() {
         [1, 2, 3],
       ]);
       expect(await h.api().getBytes('f'), [1, 2, 3]);
+    });
+
+    test('bytes response with a success:false map body is returned', () async {
+      final h = _Harness([
+        {'success': false, 'error_code': 10002, 'message': 'x'},
+      ]);
+      final res = await h.api().request(
+        'GET',
+        'f',
+        options: Options(responseType: ResponseType.bytes),
+      );
+      expect((res.data as Map)['success'], false);
+      expect(h.refreshCalls, 0);
+      expect(h.calls, 1);
     });
 
     test('string and list bodies return normally', () async {

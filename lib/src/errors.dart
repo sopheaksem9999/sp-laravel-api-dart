@@ -54,8 +54,14 @@ class SpApiError implements Exception {
   /// Stack trace of the underlying transport failure, if any.
   final StackTrace? stackTrace;
 
-  /// Whether the request failed before any HTTP response was received.
-  bool get isTransport => status == 0;
+  /// Whether the request failed in transport, before any HTTP response was
+  /// received: `status == 0` and [code] is [SpApiErrorCode.network] or
+  /// [SpApiErrorCode.timeout]. Local errors (for example a missing `select`
+  /// or an unexpected response shape) also have `status == 0` but are not
+  /// transport failures.
+  bool get isTransport =>
+      status == 0 &&
+      (code == SpApiErrorCode.network || code == SpApiErrorCode.timeout);
 
   /// Whether the server returned an HTTP response.
   bool get isHttp => status > 0;
@@ -181,6 +187,16 @@ class SpApiError implements Exception {
       code = SpApiErrorCode.rateLimited;
     } else if (status >= 500) {
       code = SpApiErrorCode.server;
+    } else if (status < 400) {
+      // 200 `{success:false}` envelope: map the backend error_code.
+      code = switch (errCode) {
+        10002 => SpApiErrorCode.unauthenticated,
+        10008 => SpApiErrorCode.forbidden,
+        10009 => SpApiErrorCode.notFound,
+        10004 => SpApiErrorCode.validation,
+        10010 => SpApiErrorCode.server,
+        _ => SpApiErrorCode.unknown,
+      };
     } else {
       code = SpApiErrorCode.unknown;
     }

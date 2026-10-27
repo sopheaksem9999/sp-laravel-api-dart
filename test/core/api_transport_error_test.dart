@@ -97,5 +97,21 @@ void main() {
         expect(s, isNot(contains('DioException')));
       }
     });
+
+    test('local errors with status 0 are not transport failures', () {
+      const e = SpApiError(
+        status: 0,
+        code: SpApiErrorCode.unencodableValue,
+        message: 'select is required',
+      );
+      expect(e.isTransport, isFalse);
+      expect(e.isHttp, isFalse);
+      const unknown = SpApiError(
+        status: 0,
+        code: SpApiErrorCode.unknown,
+        message: 'unexpected response shape',
+      );
+      expect(unknown.isTransport, isFalse);
+    });
   });
 }
