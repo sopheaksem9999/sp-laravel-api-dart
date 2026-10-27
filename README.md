@@ -62,5 +62,6 @@ final cancel = await rt.subscribe('private-tenant.42', events: {'invoices.create
 
 ## Verification Status
 
-- **Fake Backend & Fake Pusher:** Verified in CI.
-- **Reverb Contract Ladder:** Local Reverb harness verified.
+- **Rung 1 (In-Process Fake Pusher Server):** Verified in automated integration tests (`test/realtime/fake_pusher_integration_test.dart`) exercising real TCP/WebSocket handshakes, private auth subscriptions, event dispatches, and socket death auto-recovery.
+- **Rung 2 (Local Reverb Server Harness):** Contract test suite (`test/contract/reverb_contract_test.dart`) executable against local Laravel Reverb via `contract/reverb-harness/run-harness.sh --dart`.
+- **Rung 3 (Diagnostic Probe Tool):** CLI probe tool (`tool/reverb_probe.dart`) for probing and validating live Reverb or Soketi instances.
