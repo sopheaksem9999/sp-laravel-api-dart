@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- `SpApiError` now carries the transport `cause` and `stackTrace` (the originating `DioException`) for status 0 failures, plus `isTransport` / `isHttp` getters. `toString()` never prints the cause.
+
 ## 0.1.0 (2026-10-27)
 
 - First stable release of `sp_laravel_api` for Dart and Flutter.

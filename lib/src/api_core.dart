@@ -283,6 +283,8 @@ class SpApi {
           status: 0,
           code: code,
           message: dioErr.message ?? 'HTTP transport failed',
+          cause: dioErr,
+          stackTrace: dioErr.stackTrace,
         );
       }
     }

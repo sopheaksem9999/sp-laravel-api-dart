@@ -46,6 +46,20 @@ class SpApiError implements Exception {
   /// Whether the request failed because a tenant identifier was missing.
   final bool tenantRequired;
 
+  /// Underlying transport failure (e.g. a `DioException`) when no HTTP
+  /// response was received; `null` for HTTP errors. Never printed by
+  /// [toString].
+  final Object? cause;
+
+  /// Stack trace of the underlying transport failure, if any.
+  final StackTrace? stackTrace;
+
+  /// Whether the request failed before any HTTP response was received.
+  bool get isTransport => status == 0;
+
+  /// Whether the server returned an HTTP response.
+  bool get isHttp => status > 0;
+
   /// Creates a new [SpApiError].
   const SpApiError({
     required this.status,
@@ -57,6 +71,8 @@ class SpApiError implements Exception {
     this.retryAfter,
     this.body,
     this.tenantRequired = false,
+    this.cause,
+    this.stackTrace,
   });
 
   /// Factory constructing [SpApiError] from a Dio [Response].
