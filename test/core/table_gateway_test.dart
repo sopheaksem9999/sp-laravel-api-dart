@@ -230,5 +230,186 @@ void main() {
       expect(collected.map((v) => v.id), equals([1, 2, 3]));
       expect(pageCount, equals(2));
     });
+
+    test('fetchFirst sends cursor: null and fetches first page', () async {
+      final dio = Dio();
+      dio.interceptors.add(
+        InterceptorsWrapper(
+          onRequest: (options, handler) {
+            expect(options.queryParameters['cursor'], isNull);
+            expect(options.queryParameters['per_page'], equals('1'));
+            handler.resolve(
+              Response(
+                requestOptions: options,
+                statusCode: 200,
+                data: {
+                  'success': true,
+                  'data': [
+                    {'id': 1, 'title': 'First'},
+                  ],
+                  'meta': {'next_cursor': 'cur_2'},
+                },
+              ),
+            );
+          },
+        ),
+      );
+
+      final api = SpApi(
+        baseUrl: Uri.parse('https://example.com/api/v1'),
+        dio: dio,
+      );
+      final videos = api.table('videos', fromJson: Video.fromJson);
+      final page = await videos.fetchFirst(select: 'id,title', perPage: 1);
+
+      expect(page.items.length, equals(1));
+      expect(page.items[0].id, equals(1));
+      expect(page.nextCursor, equals('cur_2'));
+    });
+
+    test(
+      'fetchLast inverts sort direction and restores items to canonical order',
+      () async {
+        final dio = Dio();
+        dio.interceptors.add(
+          InterceptorsWrapper(
+            onRequest: (options, handler) {
+              // Verifies sort direction was inverted to desc
+              expect(options.queryParameters['sortby'], equals('title'));
+              expect(options.queryParameters['order'], equals('desc'));
+              expect(options.queryParameters['cursor'], isNull);
+              handler.resolve(
+                Response(
+                  requestOptions: options,
+                  statusCode: 200,
+                  data: {
+                    'success': true,
+                    'data': [
+                      {'id': 3, 'title': 'Zeta'},
+                      {'id': 2, 'title': 'Beta'},
+                      {'id': 1, 'title': 'Alpha'},
+                    ],
+                    'meta': {'next_cursor': 'before_alpha_cursor', 'total': 3},
+                  },
+                ),
+              );
+            },
+          ),
+        );
+
+        final api = SpApi(
+          baseUrl: Uri.parse('https://example.com/api/v1'),
+          dio: dio,
+        );
+        final videos = api.table('videos', fromJson: Video.fromJson);
+        final page = await videos.fetchLast(
+          select: 'id,title',
+          sort: const Sort('title', Order.asc),
+          perPage: 3,
+        );
+
+        // Re-ordered to canonical chronological order: Alpha, Beta, Zeta
+        expect(
+          page.items.map((v) => v.title),
+          equals(['Alpha', 'Beta', 'Zeta']),
+        );
+        expect(page.nextCursor, isNull);
+        expect(page.prevCursor, equals('before_alpha_cursor'));
+        expect(page.total, equals(3));
+      },
+    );
+
+    test(
+      'fetchNext and fetchPrev thread cursors and return null on absent cursor',
+      () async {
+        final dio = Dio();
+        String? lastCursorParam;
+
+        dio.interceptors.add(
+          InterceptorsWrapper(
+            onRequest: (options, handler) {
+              lastCursorParam = options.queryParameters['cursor'] as String?;
+              handler.resolve(
+                Response(
+                  requestOptions: options,
+                  statusCode: 200,
+                  data: {
+                    'success': true,
+                    'data': [
+                      {'id': 2, 'title': 'Item 2'},
+                    ],
+                    'meta': {'next_cursor': 'cur_3', 'prev_cursor': 'cur_1'},
+                  },
+                ),
+              );
+            },
+          ),
+        );
+
+        final api = SpApi(
+          baseUrl: Uri.parse('https://example.com/api/v1'),
+          dio: dio,
+        );
+        final videos = api.table('videos', fromJson: Video.fromJson);
+
+        final current = CursorPage<Video>(
+          items: [Video(id: 1, title: 'Item 1')],
+          nextCursor: 'cur_2',
+          prevCursor: 'cur_0',
+        );
+
+        final nextPage = await videos.fetchNext(current, select: 'id,title');
+        expect(lastCursorParam, equals('cur_2'));
+        expect(nextPage, isNotNull);
+
+        final prevPage = await videos.fetchPrev(current, select: 'id,title');
+        expect(lastCursorParam, equals('cur_0'));
+        expect(prevPage, isNotNull);
+
+        const emptyPage = CursorPage<Video>(items: []);
+        expect(await videos.fetchNext(emptyPage), isNull);
+        expect(await videos.fetchPrev(emptyPage), isNull);
+      },
+    );
+
+    test(
+      'cursorPagination controller manages pagination preserving query state',
+      () async {
+        final dio = Dio();
+        dio.interceptors.add(
+          InterceptorsWrapper(
+            onRequest: (options, handler) {
+              handler.resolve(
+                Response(
+                  requestOptions: options,
+                  statusCode: 200,
+                  data: {
+                    'success': true,
+                    'data': [
+                      {'id': 1, 'title': 'Item 1'},
+                    ],
+                    'meta': {'next_cursor': 'cur_2'},
+                  },
+                ),
+              );
+            },
+          ),
+        );
+
+        final api = SpApi(
+          baseUrl: Uri.parse('https://example.com/api/v1'),
+          dio: dio,
+        );
+        final videos = api.table('videos', fromJson: Video.fromJson);
+        final pagination = videos.cursorPagination(
+          select: 'id,title',
+          perPage: 1,
+        );
+
+        final first = await pagination.firstPage();
+        expect(first.items.length, equals(1));
+        expect(first.nextCursor, equals('cur_2'));
+      },
+    );
   });
 }

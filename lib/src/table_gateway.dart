@@ -253,4 +253,252 @@ class TableGateway<T> {
       currentCursor = page.nextCursor;
     }
   }
+
+  /// Fetches the very first cursor page of records (equivalent to `cursor: null`).
+  Future<CursorPage<T>> fetchFirst({
+    String? select,
+    List<Filter> where = const [],
+    List<Filter>? or,
+    Sort? sort,
+    String? search,
+    int? perPage,
+    bool? total,
+    bool? distinct,
+    String? trashed,
+    bool requireSelect = true,
+  }) => list(
+    select: select,
+    where: where,
+    or: or,
+    sort: sort,
+    search: search,
+    perPage: perPage,
+    cursor: null,
+    total: total,
+    distinct: distinct,
+    trashed: trashed,
+    requireSelect: requireSelect,
+  );
+
+  /// Fetches the last page of records by inverting the sort direction,
+  /// then restoring the returned records back to canonical order.
+  Future<CursorPage<T>> fetchLast({
+    String? select,
+    List<Filter> where = const [],
+    List<Filter>? or,
+    Sort? sort,
+    String? search,
+    int? perPage,
+    bool? total,
+    bool? distinct,
+    String? trashed,
+    bool requireSelect = true,
+  }) async {
+    final effectiveSort = sort ?? const Sort('id', Order.asc);
+    final reversedSort = effectiveSort.reversed();
+
+    final page = await list(
+      select: select,
+      where: where,
+      or: or,
+      sort: reversedSort,
+      search: search,
+      perPage: perPage,
+      cursor: null,
+      total: total,
+      distinct: distinct,
+      trashed: trashed,
+      requireSelect: requireSelect,
+    );
+
+    return CursorPage<T>(
+      items: page.items.reversed.toList(),
+      nextCursor: null,
+      prevCursor: page.nextCursor,
+      total: page.total,
+      meta: page.meta,
+    );
+  }
+
+  /// Fetches the next page of records based on [current]'s [CursorPage.nextCursor].
+  /// Returns `null` if [current] has no next page.
+  Future<CursorPage<T>?> fetchNext(
+    CursorPage<T> current, {
+    String? select,
+    List<Filter> where = const [],
+    List<Filter>? or,
+    Sort? sort,
+    String? search,
+    int? perPage,
+    bool? total,
+    bool? distinct,
+    String? trashed,
+    bool requireSelect = true,
+  }) async {
+    final cursor = current.nextCursor;
+    if (cursor == null || cursor.isEmpty) {
+      return null;
+    }
+    return list(
+      select: select,
+      where: where,
+      or: or,
+      sort: sort,
+      search: search,
+      perPage: perPage,
+      cursor: cursor,
+      total: total,
+      distinct: distinct,
+      trashed: trashed,
+      requireSelect: requireSelect,
+    );
+  }
+
+  /// Fetches the previous page of records based on [current]'s [CursorPage.prevCursor].
+  /// Returns `null` if [current] has no previous page.
+  Future<CursorPage<T>?> fetchPrev(
+    CursorPage<T> current, {
+    String? select,
+    List<Filter> where = const [],
+    List<Filter>? or,
+    Sort? sort,
+    String? search,
+    int? perPage,
+    bool? total,
+    bool? distinct,
+    String? trashed,
+    bool requireSelect = true,
+  }) async {
+    final cursor = current.prevCursor;
+    if (cursor == null || cursor.isEmpty) {
+      return null;
+    }
+    return list(
+      select: select,
+      where: where,
+      or: or,
+      sort: sort,
+      search: search,
+      perPage: perPage,
+      cursor: cursor,
+      total: total,
+      distinct: distinct,
+      trashed: trashed,
+      requireSelect: requireSelect,
+    );
+  }
+
+  /// Creates a [CursorPagination] controller preserving query parameters across pagination calls.
+  CursorPagination<T> cursorPagination({
+    String? select,
+    List<Filter> where = const [],
+    List<Filter>? or,
+    Sort? sort,
+    String? search,
+    int? perPage,
+    bool? total,
+    bool? distinct,
+    String? trashed,
+    bool requireSelect = true,
+  }) => CursorPagination<T>(
+    table: this,
+    select: select,
+    where: where,
+    or: or,
+    sort: sort,
+    search: search,
+    perPage: perPage,
+    total: total,
+    distinct: distinct,
+    trashed: trashed,
+    requireSelect: requireSelect,
+  );
+}
+
+/// Boundary controller for cursor pagination preserving filters and sort criteria.
+class CursorPagination<T> {
+  final TableGateway<T> table;
+  final String? select;
+  final List<Filter> where;
+  final List<Filter>? or;
+  final Sort? sort;
+  final String? search;
+  final int? perPage;
+  final bool? total;
+  final bool? distinct;
+  final String? trashed;
+  final bool requireSelect;
+
+  const CursorPagination({
+    required this.table,
+    this.select,
+    this.where = const [],
+    this.or,
+    this.sort,
+    this.search,
+    this.perPage,
+    this.total,
+    this.distinct,
+    this.trashed,
+    this.requireSelect = true,
+  });
+
+  /// Fetches the very first page of records.
+  Future<CursorPage<T>> firstPage() => table.fetchFirst(
+    select: select,
+    where: where,
+    or: or,
+    sort: sort,
+    search: search,
+    perPage: perPage,
+    total: total,
+    distinct: distinct,
+    trashed: trashed,
+    requireSelect: requireSelect,
+  );
+
+  /// Fetches the last page of records by inverting sort direction,
+  /// then reversing items back to canonical order.
+  Future<CursorPage<T>> lastPage() => table.fetchLast(
+    select: select,
+    where: where,
+    or: or,
+    sort: sort,
+    search: search,
+    perPage: perPage,
+    total: total,
+    distinct: distinct,
+    trashed: trashed,
+    requireSelect: requireSelect,
+  );
+
+  /// Fetches the next page using [current]. Returns `null` if no next page.
+  Future<CursorPage<T>?> nextPage(CursorPage<T> current) => table.fetchNext(
+    current,
+    select: select,
+    where: where,
+    or: or,
+    sort: sort,
+    search: search,
+    perPage: perPage,
+    total: total,
+    distinct: distinct,
+    trashed: trashed,
+    requireSelect: requireSelect,
+  );
+
+  /// Fetches the previous page using [current]. Returns `null` if no previous page.
+  Future<CursorPage<T>?> prevPage(CursorPage<T> current) => table.fetchPrev(
+    current,
+    select: select,
+    where: where,
+    or: or,
+    sort: sort,
+    search: search,
+    perPage: perPage,
+    total: total,
+    distinct: distinct,
+    trashed: trashed,
+    requireSelect: requireSelect,
+  );
 }

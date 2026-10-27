@@ -12,6 +12,9 @@ class Sort {
   /// Creates a sort specification.
   const Sort(this.field, [this.order = Order.asc]);
 
+  /// Returns a new [Sort] with the [order] inverted.
+  Sort reversed() => Sort(field, order == Order.asc ? Order.desc : Order.asc);
+
   @override
   bool operator ==(Object other) =>
       identical(this, other) ||
