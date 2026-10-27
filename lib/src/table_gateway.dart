@@ -311,7 +311,8 @@ class TableGateway<T> {
     int? perPage,
     bool requireSelect = true,
   }) async* {
-    String? currentCursor;
+    // An empty cursor selects cursor mode (page one); null would be offset mode.
+    String? currentCursor = '';
 
     for (;;) {
       final page = await list(
@@ -340,7 +341,7 @@ class TableGateway<T> {
     }
   }
 
-  /// Fetches the very first cursor page of records (equivalent to `cursor: null`).
+  /// Fetches the very first cursor page of records (sends `cursor=`, cursor mode).
   Future<CursorPage<T>> fetchFirst({
     String? select,
     List<Filter> where = const [],
@@ -359,7 +360,7 @@ class TableGateway<T> {
     sort: sort,
     search: search,
     perPage: perPage,
-    cursor: null,
+    cursor: '',
     total: total,
     distinct: distinct,
     trashed: trashed,
@@ -390,7 +391,7 @@ class TableGateway<T> {
       sort: reversedSort,
       search: search,
       perPage: perPage,
-      cursor: null,
+      cursor: '',
       total: total,
       distinct: distinct,
       trashed: trashed,
@@ -400,7 +401,10 @@ class TableGateway<T> {
     return CursorPage<T>(
       items: page.items.reversed.toList(),
       nextCursor: null,
-      prevCursor: page.nextCursor,
+      // A single short page has no previous page.
+      prevCursor: perPage != null && page.items.length < perPage
+          ? null
+          : page.nextCursor,
       total: page.total,
       meta: page.meta,
     );
@@ -467,6 +471,7 @@ class TableGateway<T> {
       search: search,
       perPage: perPage,
       cursor: cursor,
+      direction: 'prev',
       total: total,
       distinct: distinct,
       trashed: trashed,

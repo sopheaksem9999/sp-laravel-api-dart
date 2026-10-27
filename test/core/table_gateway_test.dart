@@ -231,12 +231,12 @@ void main() {
       expect(pageCount, equals(2));
     });
 
-    test('fetchFirst sends cursor: null and fetches first page', () async {
+    test('fetchFirst sends an empty cursor (cursor mode) and fetches first page', () async {
       final dio = Dio();
       dio.interceptors.add(
         InterceptorsWrapper(
           onRequest: (options, handler) {
-            expect(options.queryParameters['cursor'], isNull);
+            expect(options.queryParameters['cursor'], equals(''));
             expect(options.queryParameters['per_page'], equals('1'));
             handler.resolve(
               Response(
@@ -277,7 +277,7 @@ void main() {
               // Verifies sort direction was inverted to desc
               expect(options.queryParameters['sortby'], equals('title'));
               expect(options.queryParameters['order'], equals('desc'));
-              expect(options.queryParameters['cursor'], isNull);
+              expect(options.queryParameters['cursor'], equals(''));
               handler.resolve(
                 Response(
                   requestOptions: options,

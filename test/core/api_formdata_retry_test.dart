@@ -65,11 +65,10 @@ void main() {
           'data': {'id': 1},
         }),
       ]);
-      final res = await _api(a, auth: _auth()).request(
-        'POST',
-        'attachments',
-        data: _form(),
-      );
+      final res = await _api(
+        a,
+        auth: _auth(),
+      ).request('POST', 'attachments', data: _form());
       expect(a.calls, 2);
       expect((res.data as Map)['data'], {'id': 1});
     });
@@ -86,11 +85,10 @@ void main() {
           'data': {'id': 2},
         }),
       ]);
-      final res = await _api(a, auth: _auth()).request(
-        'POST',
-        'attachments',
-        data: _form(),
-      );
+      final res = await _api(
+        a,
+        auth: _auth(),
+      ).request('POST', 'attachments', data: _form());
       expect(a.calls, 2);
       expect((res.data as Map)['data'], {'id': 2});
     });
