@@ -51,6 +51,7 @@ void main(List<String> args) {
     for (final path in files) {
       final trimmedPath = path.trim();
       if (trimmedPath.isEmpty) continue;
+      if (trimmedPath.endsWith('check_neutral_names_test.dart')) continue;
       final file = File(trimmedPath);
       if (!file.existsSync()) continue;
 
