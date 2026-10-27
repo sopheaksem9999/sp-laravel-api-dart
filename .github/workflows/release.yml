@@ -7,10 +7,11 @@ on:
 
 permissions:
   contents: write
+  id-token: write
 
 jobs:
   verify-and-release:
-    name: Verify & Create Release
+    name: Verify, Release & Publish
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -33,7 +34,7 @@ jobs:
       - name: Check forbidden imports and neutral names
         run: dart run tool/check.dart
         env:
-          FORBIDDEN_NAMES: ${{ secrets.FORBIDDEN_NAMES }}
+          FORBIDDEN_NAMES: ${{ secrets.FORBIDDEN_NAMES || 'cambogara,karunafilm,karuna,speedx' }}
 
       - name: Run tests
         run: dart test
@@ -44,3 +45,6 @@ jobs:
           generate_release_notes: true
           draft: false
           prerelease: ${{ contains(github.ref, '-beta') || contains(github.ref, '-alpha') || contains(github.ref, '-rc') }}
+
+      - name: Publish to pub.dev
+        run: dart pub publish --force
