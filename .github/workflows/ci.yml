@@ -59,3 +59,7 @@ jobs:
 
       - name: Run tests
         run: dart test
+
+      - name: Smoke check web compilation
+        if: matrix.sdk == 'stable'
+        run: dart compile js test/realtime/driver_test.dart -o /tmp/smoke_laravel.js
