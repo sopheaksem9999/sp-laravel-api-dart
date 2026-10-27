@@ -93,6 +93,77 @@ class AttachmentsModule {
     );
   }
 
+  /// `sp_attachments/{rpcPrefix}/...segments`, each segment URL-encoded.
+  String _path(List<Object> segments) {
+    final prefix = api.rpcPrefix.replaceAll(RegExp(r'^/+|/+$'), '');
+    return [
+      'sp_attachments',
+      if (prefix.isNotEmpty) prefix,
+      ...segments.map((s) => Uri.encodeComponent(s.toString())),
+    ].join('/');
+  }
+
+  /// Uploads a file with one `multipart/form-data` POST (`rpc/upload`).
+  ///
+  /// Exactly one of [bytes] or [filePath] is required. Returns the attachment
+  /// record. For large files use [uploadMultipart].
+  Future<Map<String, dynamic>> upload({
+    List<int>? bytes,
+    String? filePath,
+    required String filename,
+    String visibility = 'private',
+  }) async {
+    if ((bytes == null) == (filePath == null)) {
+      throw ArgumentError(
+        'Provide exactly one of bytes or filePath to AttachmentsModule.upload.',
+      );
+    }
+    final part = bytes != null
+        ? MultipartFile.fromBytes(bytes, filename: filename)
+        : await MultipartFile.fromFile(filePath!, filename: filename);
+    final form = FormData.fromMap({'file': part, 'visibility': visibility});
+    final res = await api.request(
+      'POST',
+      _path(['upload']),
+      data: form,
+      options: Options(contentType: 'multipart/form-data'),
+    );
+    final raw = res.data;
+    if (raw is Map<String, dynamic>) {
+      final data = raw['data'];
+      if (data is Map<String, dynamic>) return data;
+      return raw;
+    }
+    return <String, dynamic>{};
+  }
+
+  /// Links an existing attachment to a record
+  /// (`POST rpc/record/{table}/{record_id}` with `attachment_id`).
+  Future<void> link(String table, Object recordId, String attachmentId) async {
+    await api.request(
+      'POST',
+      _path(['record', table, recordId]),
+      data: {'attachment_id': attachmentId},
+    );
+  }
+
+  /// Removes the link between an attachment and a record
+  /// (`DELETE rpc/record/{table}/{record_id}/{attachment_id}`).
+  Future<void> unlink(
+    String table,
+    Object recordId,
+    String attachmentId,
+  ) async {
+    await api.request(
+      'DELETE',
+      _path(['record', table, recordId, attachmentId]),
+    );
+  }
+
+  /// Fetches the attachment bytes from `rpc/{id}/view` with the client's
+  /// auth headers (for protected files that cannot be loaded from a bare URL).
+  Future<List<int>> viewBytes(String id) => api.getBytes(_path([id, 'view']));
+
   /// Builds a view URL for an attachment, supporting optional image dimensions and format.
   String getViewUrl(
     dynamic attachmentId, {

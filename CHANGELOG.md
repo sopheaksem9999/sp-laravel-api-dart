@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- `AttachmentsModule.upload` (multipart form POST to `sp_attachments/rpc/upload`, `bytes` or `filePath`, `visibility` default `private`), `link` / `unlink` for record attachments, and `viewBytes` (authenticated `GET rpc/{id}/view`). Signed-URL methods and URL builders are unchanged.
 - `TableGateway.list` and `serializeQuery` accept `direction` (`next` or `prev`) and `cursorColumn`, sent as `direction=` and `cursor_column=`.
 - **Behaviour change:** an empty `cursor` is now sent as `cursor=` (empty string) instead of being remapped to `0`; the backend treats both as the first page. `cursor: null` still sends no cursor.
 - **Behaviour change:** `CursorPage.nextCursor` is now `meta['next_cursor']` whenever the backend provides it, regardless of item count (previously only on full pages). It is null when absent; offset mode still yields no cursor.
