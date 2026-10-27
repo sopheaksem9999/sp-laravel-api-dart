@@ -9,6 +9,16 @@ export 'src/query/filter.dart';
 export 'src/query/serialize.dart';
 export 'src/query/sort.dart';
 export 'src/table_gateway.dart';
+export 'src/modules/attachments_module.dart';
+export 'src/modules/audit_module.dart';
+export 'src/modules/bulk_module.dart';
+export 'src/modules/permissions_module.dart';
+export 'src/realtime/driver.dart';
+export 'src/realtime/pusher_framing.dart';
+export 'src/realtime/record_event.dart';
+export 'src/realtime/sp_realtime.dart';
+export 'src/realtime/transport.dart';
+export 'src/realtime/websocket_transport.dart';
 
 /// Current version of the `sp_laravel_api` package.
 const String packageVersion = '0.1.0-beta.1';

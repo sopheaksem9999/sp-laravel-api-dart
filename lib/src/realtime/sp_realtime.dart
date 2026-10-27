@@ -48,6 +48,9 @@ class SpRealtime {
   /// Timeout after sending ping before connection is assumed dead.
   final Duration pongTimeout;
 
+  /// Delay before automatically attempting to reconnect after an unexpected disconnect.
+  final Duration reconnectDelay;
+
   String? _socketId;
   Future<void>? _connectingFuture;
   StreamSubscription<String>? _incomingSub;
@@ -62,8 +65,10 @@ class SpRealtime {
 
   Timer? _activityTimer;
   Timer? _pongTimer;
+  Timer? _reconnectTimer;
   bool _isDisposed = false;
   bool _reconnecting = false;
+  bool _manualDisconnect = false;
   DateTime? _pausedAt;
   bool _isOffline = false;
 
@@ -113,11 +118,15 @@ class SpRealtime {
     Dio? dio,
     this.activityTimeout = const Duration(seconds: 120),
     this.pongTimeout = const Duration(seconds: 30),
+    this.reconnectDelay = const Duration(milliseconds: 100),
   }) : _transport = transport ?? WebSocketTransport(),
        dio = dio ?? Dio();
 
   /// Whether the WebSocket connection is open and handshake is complete.
   bool get isConnected => _socketId != null;
+
+  /// Current Pusher socket ID assigned by the server, or null if disconnected.
+  String? get socketId => _socketId;
 
   /// Whether the connection is connected and keepalive health check is passing.
   bool get isHealthy => isConnected && _pongTimer == null;
@@ -127,6 +136,8 @@ class SpRealtime {
     if (_isDisposed) {
       throw StateError('Cannot connect a disposed SpRealtime client.');
     }
+    _manualDisconnect = false;
+    _reconnectTimer?.cancel();
     if (isConnected) {
       return Future.value();
     }
@@ -248,6 +259,15 @@ class SpRealtime {
 
     for (final callback in List.of(_disconnectCallbacks)) {
       callback();
+    }
+
+    if (!_isDisposed && !_isOffline && !_manualDisconnect) {
+      _reconnectTimer?.cancel();
+      _reconnectTimer = Timer(reconnectDelay, () {
+        if (!_isDisposed && !_isOffline && !isConnected) {
+          connect().catchError((_) {});
+        }
+      });
     }
   }
 
@@ -410,9 +430,19 @@ class SpRealtime {
     _recoveryCallbacks.add(callback);
   }
 
+  /// Manually disconnects from the broadcasting server and stops auto-reconnect.
+  Future<void> disconnect() async {
+    _manualDisconnect = true;
+    _reconnectTimer?.cancel();
+    await _transport.close();
+    _handleDisconnect();
+  }
+
   /// Closes the connection and releases all resources.
   Future<void> dispose() async {
     _isDisposed = true;
+    _manualDisconnect = true;
+    _reconnectTimer?.cancel();
     _activityTimer?.cancel();
     _pongTimer?.cancel();
     await _incomingSub?.cancel();
