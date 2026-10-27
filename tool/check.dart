@@ -14,16 +14,23 @@ void main() {
           final line = lines[i].trim();
           if (line.startsWith('import ') || line.startsWith('export ')) {
             if (line.contains("'dart:io'") || line.contains('"dart:io"')) {
-              errors.add('${entity.path}:${i + 1}: Forbidden import dart:io in core library.');
+              errors.add(
+                '${entity.path}:${i + 1}: Forbidden import dart:io in core library.',
+              );
             }
             if (line.contains("'dart:html'") || line.contains('"dart:html"')) {
-              errors.add('${entity.path}:${i + 1}: Forbidden import dart:html.');
+              errors.add(
+                '${entity.path}:${i + 1}: Forbidden import dart:html.',
+              );
             }
             if (line.contains("'dart:ui'") || line.contains('"dart:ui"')) {
               errors.add('${entity.path}:${i + 1}: Forbidden import dart:ui.');
             }
-            if (line.contains("'package:flutter/") || line.contains('"package:flutter/')) {
-              errors.add('${entity.path}:${i + 1}: Forbidden import package:flutter in pure Dart package.');
+            if (line.contains("'package:flutter/") ||
+                line.contains('"package:flutter/')) {
+              errors.add(
+                '${entity.path}:${i + 1}: Forbidden import package:flutter in pure Dart package.',
+              );
             }
           }
         }
@@ -42,7 +49,9 @@ void main() {
   stdout.writeln('Import check passed: zero forbidden imports.');
 
   // 2. Run neutral names check
-  final neutralResult = Process.runSync('dart', ['tool/check_neutral_names.dart']);
+  final neutralResult = Process.runSync('dart', [
+    'tool/check_neutral_names.dart',
+  ]);
   if (neutralResult.exitCode != 0) {
     stderr.write(neutralResult.stderr);
     exit(neutralResult.exitCode);

@@ -28,10 +28,14 @@ void main(List<String> args) {
 
   if (forbiddenEnv == null || forbiddenEnv.trim().isEmpty) {
     if (isCi) {
-      stderr.writeln('Error: FORBIDDEN_NAMES environment variable must be set in CI.');
+      stderr.writeln(
+        'Error: FORBIDDEN_NAMES environment variable must be set in CI.',
+      );
       exit(1);
     } else {
-      stdout.writeln('Notice: FORBIDDEN_NAMES is not set locally; skipping check.');
+      stdout.writeln(
+        'Notice: FORBIDDEN_NAMES is not set locally; skipping check.',
+      );
       exit(0);
     }
   }
@@ -59,7 +63,9 @@ void main(List<String> args) {
       final lowerPath = trimmedPath.toLowerCase();
       for (final forbidden in forbiddenList) {
         if (lowerPath.contains(forbidden)) {
-          stderr.writeln('Forbidden name in file path: $trimmedPath (matches "$forbidden")');
+          stderr.writeln(
+            'Forbidden name in file path: $trimmedPath (matches "$forbidden")',
+          );
           found = true;
         }
       }
@@ -70,7 +76,9 @@ void main(List<String> args) {
         final lowerContent = content.toLowerCase();
         for (final forbidden in forbiddenList) {
           if (lowerContent.contains(forbidden)) {
-            stderr.writeln('Forbidden name in $trimmedPath (matches "$forbidden")');
+            stderr.writeln(
+              'Forbidden name in $trimmedPath (matches "$forbidden")',
+            );
             found = true;
           }
         }
@@ -81,21 +89,32 @@ void main(List<String> args) {
   }
 
   // 2. Scan commit messages
-  final gitLogResult = Process.runSync('git', ['log', '-n', '50', '--format=%B']);
+  final gitLogResult = Process.runSync('git', [
+    'log',
+    '-n',
+    '50',
+    '--format=%B',
+  ]);
   if (gitLogResult.exitCode == 0) {
     final logText = (gitLogResult.stdout as String).toLowerCase();
     for (final forbidden in forbiddenList) {
       if (logText.contains(forbidden)) {
-        stderr.writeln('Forbidden name found in git commit log (matches "$forbidden")');
+        stderr.writeln(
+          'Forbidden name found in git commit log (matches "$forbidden")',
+        );
         found = true;
       }
     }
   }
 
   if (found) {
-    stderr.writeln('Public repo hygiene check FAILED: client or proprietary names detected.');
+    stderr.writeln(
+      'Public repo hygiene check FAILED: client or proprietary names detected.',
+    );
     exit(1);
   }
 
-  stdout.writeln('Public repo hygiene check PASSED: zero forbidden names detected.');
+  stdout.writeln(
+    'Public repo hygiene check PASSED: zero forbidden names detected.',
+  );
 }
