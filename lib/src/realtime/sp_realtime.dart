@@ -226,10 +226,14 @@ class SpRealtime {
 
     RecordEvent event;
     if (frame.data is Map<String, dynamic>) {
-      event = RecordEvent.fromJson(frame.data as Map<String, dynamic>);
+      event = RecordEvent.fromJson(
+        frame.data as Map<String, dynamic>,
+        eventName: frame.event,
+      );
     } else if (frame.data is Map) {
       event = RecordEvent.fromJson(
         Map<String, dynamic>.from(frame.data as Map),
+        eventName: frame.event,
       );
     } else {
       // Parse table and action from event name
@@ -237,9 +241,12 @@ class SpRealtime {
       final table = parts.isNotEmpty ? parts.first : '';
       event = RecordEvent(
         table: table,
-        action: RecordAction.created,
+        action: RecordAction.unknown,
         record: {},
         timestamp: DateTime.now().toUtc(),
+        eventName: frame.event,
+        raw: const {},
+        isRecord: false,
       );
     }
 

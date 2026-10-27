@@ -1,5 +1,8 @@
 /// Action performed in a [RecordEvent].
-enum RecordAction { created, updated, deleted, restored, upserted }
+///
+/// [unknown] is used when the payload has no recognised `action`
+/// (for example non-record events such as `courier_location.updated`).
+enum RecordAction { created, updated, deleted, restored, upserted, unknown }
 
 /// Broadcast event emitted when a record is mutated on the backend.
 class RecordEvent {
@@ -18,6 +21,16 @@ class RecordEvent {
   /// The timestamp of the mutation.
   final DateTime timestamp;
 
+  /// The broadcast event name (e.g. `order.updated`), or empty if unknown.
+  final String eventName;
+
+  /// The full payload exactly as broadcast.
+  final Map<String, dynamic> raw;
+
+  /// Whether the payload is a record event (has a string `table` and a map
+  /// `record`). False for custom events such as `courier_location.updated`.
+  final bool isRecord;
+
   /// Creates a [RecordEvent].
   const RecordEvent({
     required this.table,
@@ -25,11 +38,17 @@ class RecordEvent {
     required this.record,
     this.tenantId,
     required this.timestamp,
+    this.eventName = '',
+    this.raw = const {},
+    this.isRecord = true,
   });
 
   /// Factory creating [RecordEvent] from JSON payload.
-  factory RecordEvent.fromJson(Map<String, dynamic> json) {
-    final rawAction = json['action']?.toString() ?? 'created';
+  factory RecordEvent.fromJson(
+    Map<String, dynamic> json, {
+    String eventName = '',
+  }) {
+    final rawAction = json['action']?.toString() ?? '';
     RecordAction act;
     switch (rawAction) {
       case 'created':
@@ -43,7 +62,7 @@ class RecordEvent {
       case 'upserted':
         act = RecordAction.upserted;
       default:
-        act = RecordAction.created;
+        act = RecordAction.unknown;
     }
 
     DateTime ts;
@@ -67,6 +86,9 @@ class RecordEvent {
       record: recordMap,
       tenantId: json['tenant_id']?.toString(),
       timestamp: ts,
+      eventName: eventName,
+      raw: json,
+      isRecord: json['table'] is String && json['record'] is Map,
     );
   }
 }
