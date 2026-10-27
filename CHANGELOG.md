@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- `TableGateway.list/get/create/update/patch/remove/restore/upsert` accept optional `Options? options` and `CancelToken? cancelToken`, forwarded to `SpApi.request` (per-request headers win over tenant/auth headers). Existing calls are unchanged.
 - `SpApi.rpc` accepts optional `query` (query parameters), `method` (override; default stays POST with a body, GET otherwise) and `options` (Dio `Options` merged into the request).
 - **BREAKING (behaviour change):** `SpApi.request` now throws `SpApiError` (status stays the HTTP status, e.g. 200) when a response with status < 400 has a JSON map body with `success: false`. Error code 10002 on such a response is routed through `ApiAuth.handleUnauthorized()` and retried once, like a 401. Bytes responses and non-map bodies are unaffected. Opt out with `SpApi(treatSuccessFalseAsError: false)` to restore the 0.1.0 behaviour.
 - `SpApiError.retryAfter` now also reads `errors.retry_after_seconds` (first element, int or numeric string; zero or negative ignored) as a last fallback after the `Retry-After` header and body `retry_after`. The value remains in `fieldErrors`.

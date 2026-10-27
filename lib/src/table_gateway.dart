@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'package:dio/dio.dart';
 import 'api_core.dart';
 import 'errors.dart';
 import 'pagination.dart';
@@ -38,6 +39,8 @@ class TableGateway<T> {
     bool? distinct,
     String? trashed,
     bool requireSelect = true,
+    Options? options,
+    CancelToken? cancelToken,
   }) async {
     final params = serializeQuery(
       select: select,
@@ -54,7 +57,13 @@ class TableGateway<T> {
       requireSelect: requireSelect,
     );
 
-    final res = await api.request('GET', name, queryParameters: params);
+    final res = await api.request(
+      'GET',
+      name,
+      queryParameters: params,
+      options: options,
+      cancelToken: cancelToken,
+    );
 
     final body = res.data;
     List<dynamic> rows = [];
@@ -81,14 +90,26 @@ class TableGateway<T> {
   }
 
   /// Retrieves a single record by [id].
-  Future<T> get(dynamic id, {String? select, bool requireSelect = true}) async {
+  Future<T> get(
+    dynamic id, {
+    String? select,
+    bool requireSelect = true,
+    Options? options,
+    CancelToken? cancelToken,
+  }) async {
     Map<String, String>? params;
     if (select != null || requireSelect) {
       params = serializeQuery(select: select, requireSelect: requireSelect);
       params.remove('per_page');
     }
 
-    final res = await api.request('GET', '$name/$id', queryParameters: params);
+    final res = await api.request(
+      'GET',
+      '$name/$id',
+      queryParameters: params,
+      options: options,
+      cancelToken: cancelToken,
+    );
 
     final body = res.data;
     if (body is Map<String, dynamic>) {
@@ -106,8 +127,18 @@ class TableGateway<T> {
   }
 
   /// Inserts a new record into the table.
-  Future<T> create(Map<String, dynamic> body) async {
-    final res = await api.request('POST', name, data: body);
+  Future<T> create(
+    Map<String, dynamic> body, {
+    Options? options,
+    CancelToken? cancelToken,
+  }) async {
+    final res = await api.request(
+      'POST',
+      name,
+      data: body,
+      options: options,
+      cancelToken: cancelToken,
+    );
 
     final resData = res.data;
     if (resData is Map<String, dynamic>) {
@@ -125,8 +156,19 @@ class TableGateway<T> {
   }
 
   /// Updates an existing record via PUT.
-  Future<T> update(dynamic id, Map<String, dynamic> body) async {
-    final res = await api.request('PUT', '$name/$id', data: body);
+  Future<T> update(
+    dynamic id,
+    Map<String, dynamic> body, {
+    Options? options,
+    CancelToken? cancelToken,
+  }) async {
+    final res = await api.request(
+      'PUT',
+      '$name/$id',
+      data: body,
+      options: options,
+      cancelToken: cancelToken,
+    );
 
     final resData = res.data;
     if (resData is Map<String, dynamic>) {
@@ -144,8 +186,19 @@ class TableGateway<T> {
   }
 
   /// Partially updates an existing record via PATCH.
-  Future<T> patch(dynamic id, Map<String, dynamic> body) async {
-    final res = await api.request('PATCH', '$name/$id', data: body);
+  Future<T> patch(
+    dynamic id,
+    Map<String, dynamic> body, {
+    Options? options,
+    CancelToken? cancelToken,
+  }) async {
+    final res = await api.request(
+      'PATCH',
+      '$name/$id',
+      data: body,
+      options: options,
+      cancelToken: cancelToken,
+    );
 
     final resData = res.data;
     if (resData is Map<String, dynamic>) {
@@ -163,15 +216,35 @@ class TableGateway<T> {
   }
 
   /// Deletes a record by [id].
-  Future<bool> remove(dynamic id, {bool force = false}) async {
+  Future<bool> remove(
+    dynamic id, {
+    bool force = false,
+    Options? options,
+    CancelToken? cancelToken,
+  }) async {
     final query = force ? {'force': 'true'} : null;
-    await api.request('DELETE', '$name/$id', queryParameters: query);
+    await api.request(
+      'DELETE',
+      '$name/$id',
+      queryParameters: query,
+      options: options,
+      cancelToken: cancelToken,
+    );
     return true;
   }
 
   /// Restores a soft-deleted record by [id]. Returns count of restored rows.
-  Future<int> restore(dynamic id) async {
-    final res = await api.request('POST', '$name/$id/restore');
+  Future<int> restore(
+    dynamic id, {
+    Options? options,
+    CancelToken? cancelToken,
+  }) async {
+    final res = await api.request(
+      'POST',
+      '$name/$id/restore',
+      options: options,
+      cancelToken: cancelToken,
+    );
     final resData = res.data;
     if (resData is Map<String, dynamic>) {
       final inner = resData['data'];
@@ -188,12 +261,16 @@ class TableGateway<T> {
     required List<String> matchOn,
     bool refetch = false,
     String? select,
+    Options? options,
+    CancelToken? cancelToken,
   }) async {
     final res = await api.request(
       'POST',
       '$name/upsert',
       queryParameters: {'match_on': matchOn.join(',')},
       data: body,
+      options: options,
+      cancelToken: cancelToken,
     );
 
     final resData = res.data;
@@ -203,7 +280,12 @@ class TableGateway<T> {
 
     if (refetch) {
       if (row is Map<String, dynamic> && row['id'] != null) {
-        return get(row['id'], select: select);
+        return get(
+          row['id'],
+          select: select,
+          options: options,
+          cancelToken: cancelToken,
+        );
       }
       throw SpApiError(
         status: 0,
