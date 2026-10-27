@@ -244,6 +244,61 @@ void main() {
     );
 
     test(
+      'channel auth transport failures keep the cause and map timeout/network',
+      () async {
+        for (final entry in {
+          DioExceptionType.connectionTimeout: SpApiErrorCode.timeout,
+          DioExceptionType.receiveTimeout: SpApiErrorCode.timeout,
+          DioExceptionType.connectionError: SpApiErrorCode.network,
+        }.entries) {
+          final dio = Dio();
+          late DioException original;
+          dio.interceptors.add(
+            InterceptorsWrapper(
+              onRequest: (options, handler) {
+                handler.reject(
+                  original = DioException(
+                    requestOptions: options,
+                    type: entry.key,
+                    message: 'boom',
+                    stackTrace: StackTrace.current,
+                  ),
+                );
+              },
+            ),
+          );
+          final rt = SpRealtime(
+            apiBaseUrl: Uri.parse('https://example.com/api/v1'),
+            driver: Driver.reverb(
+              host: 'ws.example.com',
+              port: 8080,
+              appKey: 'k1',
+            ),
+            tokenProvider: () async => 't',
+            transport: FakeRealtimeTransport(),
+            dio: dio,
+          );
+          await rt.connect();
+          await expectLater(
+            rt.subscribe('private-tenant.42', onEvent: (_) {}),
+            throwsA(
+              isA<SpApiError>()
+                  .having((e) => e.code, 'code', entry.value)
+                  .having((e) => e.cause, 'cause', isA<DioException>())
+                  .having((e) => identical(e.cause, original), 'same', isTrue)
+                  .having(
+                    (e) => identical(e.stackTrace, original.stackTrace),
+                    'stackTrace',
+                    isTrue,
+                  ),
+            ),
+            reason: entry.key.name,
+          );
+        }
+      },
+    );
+
+    test(
       'removing one subscription does not drop other active listeners on same channel',
       () async {
         final transport = FakeRealtimeTransport();

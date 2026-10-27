@@ -44,6 +44,14 @@ void main() {
       expect(e.record, isEmpty);
     });
 
+    test('non-string table gives isRecord false and does not throw', () {
+      final e = RecordEvent.fromJson({
+        'table': 42,
+        'record': {'id': 1},
+      });
+      expect(e.isRecord, isFalse);
+    });
+
     test('eventName defaults to empty and is settable', () {
       expect(RecordEvent.fromJson({}).eventName, equals(''));
       expect(

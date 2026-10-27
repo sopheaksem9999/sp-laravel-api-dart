@@ -388,10 +388,18 @@ class SpRealtime {
         if (res != null) {
           throw SpApiError.fromResponse(res);
         }
+        final code =
+            dioErr.type == DioExceptionType.connectionTimeout ||
+                dioErr.type == DioExceptionType.receiveTimeout ||
+                dioErr.type == DioExceptionType.sendTimeout
+            ? SpApiErrorCode.timeout
+            : SpApiErrorCode.network;
         throw SpApiError(
           status: 0,
-          code: SpApiErrorCode.network,
+          code: code,
           message: dioErr.message ?? 'Channel authorization network failure',
+          cause: dioErr,
+          stackTrace: dioErr.stackTrace,
         );
       }
     }
