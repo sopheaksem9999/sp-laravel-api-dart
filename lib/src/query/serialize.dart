@@ -248,6 +248,8 @@ Map<String, String> serializeQuery({
   String? search,
   int? perPage,
   String? cursor,
+  String? direction,
+  String? cursorColumn,
   int? page,
   bool? total,
   bool? distinct,
@@ -339,9 +341,18 @@ Map<String, String> serializeQuery({
   }
 
   if (cursor != null) {
-    params['cursor'] = cursor.isEmpty ? '0' : cursor;
+    // An empty cursor is sent as-is (`cursor=`); the backend treats it as
+    // the first page, exactly like `0`.
+    params['cursor'] = cursor;
   } else if (page != null) {
     params['page'] = page.toString();
+  }
+
+  if (direction != null && direction.isNotEmpty) {
+    params['direction'] = direction;
+  }
+  if (cursorColumn != null && cursorColumn.isNotEmpty) {
+    params['cursor_column'] = cursorColumn;
   }
 
   params['per_page'] = (perPage ?? 25).toString();

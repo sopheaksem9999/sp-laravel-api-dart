@@ -70,14 +70,46 @@
     }
   },
   {
-    "name": "null or empty cursor becomes 0",
+    "name": "empty cursor is sent as empty string",
     "query": {
       "select": "id",
       "cursor": ""
     },
     "expected": {
       "select": "id",
-      "cursor": "0",
+      "cursor": "",
+      "per_page": "25"
+    }
+  },
+  {
+    "name": "cursor with direction and cursor_column",
+    "query": {
+      "select": "id",
+      "cursor": "",
+      "direction": "next",
+      "cursorColumn": "created_at",
+      "total": true
+    },
+    "expected": {
+      "select": "id",
+      "cursor": "",
+      "direction": "next",
+      "cursor_column": "created_at",
+      "total": "true",
+      "per_page": "25"
+    }
+  },
+  {
+    "name": "prev direction with cursor",
+    "query": {
+      "select": "id",
+      "cursor": "c1.x",
+      "direction": "prev"
+    },
+    "expected": {
+      "select": "id",
+      "cursor": "c1.x",
+      "direction": "prev",
       "per_page": "25"
     }
   },

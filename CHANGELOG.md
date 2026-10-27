@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- `TableGateway.list` and `serializeQuery` accept `direction` (`next` or `prev`) and `cursorColumn`, sent as `direction=` and `cursor_column=`.
+- **Behaviour change:** an empty `cursor` is now sent as `cursor=` (empty string) instead of being remapped to `0`; the backend treats both as the first page. `cursor: null` still sends no cursor.
+- **Behaviour change:** `CursorPage.nextCursor` is now `meta['next_cursor']` whenever the backend provides it, regardless of item count (previously only on full pages). It is null when absent; offset mode still yields no cursor.
 - `RecordEvent` now exposes `eventName` (the broadcast event name), `raw` (the full payload as broadcast) and `isRecord` (true only when the payload has a string `table` and a map `record`). Non-record events such as `courier_location.updated` are delivered to the `subscribe` handler with all fields in `raw`. A non-map `record` no longer yields surprises: it gives an empty `record` and `isRecord == false`.
 - **Behaviour change:** added `RecordAction.unknown`. A payload with a missing or unrecognised `action` now maps to `unknown` instead of `created`. Exhaustive `switch` statements over `RecordAction` need a new case.
 

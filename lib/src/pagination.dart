@@ -45,7 +45,7 @@ class CursorPage<T> {
     }
 
     String? next;
-    if (!offsetMode && items.length >= perPage) {
+    if (!offsetMode) {
       final nextRaw = meta['next_cursor'] ?? meta['nextCursor'];
       if (nextRaw != null) {
         next = nextRaw.toString();

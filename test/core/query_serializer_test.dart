@@ -20,6 +20,8 @@ void main() {
         final perPage = queryData['perPage'] as int?;
         final cursor = queryData['cursor'] as String?;
         final total = queryData['total'] as bool?;
+        final direction = queryData['direction'] as String?;
+        final cursorColumn = queryData['cursorColumn'] as String?;
 
         Sort? sort;
         if (queryData['sort'] != null) {
@@ -74,6 +76,8 @@ void main() {
           sort: sort,
           perPage: perPage,
           cursor: cursor,
+          direction: direction,
+          cursorColumn: cursorColumn,
           total: total,
           requireSelect: false,
         );
@@ -111,7 +115,7 @@ void main() {
 
     test('handles cursor variations', () {
       expect(serializeQuery(select: 'id', cursor: null)['cursor'], isNull);
-      expect(serializeQuery(select: 'id', cursor: '')['cursor'], equals('0'));
+      expect(serializeQuery(select: 'id', cursor: '')['cursor'], equals(''));
       expect(
         serializeQuery(select: 'id', cursor: 'cur_abc')['cursor'],
         equals('cur_abc'),

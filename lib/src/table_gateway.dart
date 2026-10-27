@@ -41,6 +41,8 @@ class TableGateway<T> {
     bool requireSelect = true,
     Options? options,
     CancelToken? cancelToken,
+    String? direction,
+    String? cursorColumn,
   }) async {
     final params = serializeQuery(
       select: select,
@@ -50,6 +52,8 @@ class TableGateway<T> {
       search: search,
       perPage: perPage,
       cursor: cursor,
+      direction: direction,
+      cursorColumn: cursorColumn,
       page: page,
       total: total,
       distinct: distinct,
