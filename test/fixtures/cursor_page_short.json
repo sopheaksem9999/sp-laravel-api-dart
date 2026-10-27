@@ -1,1 +1,1 @@
-{"success":true,"data":[{"id":4}],"meta":{"request_id":"req-short","cursor":"c1.2024-01-02.3","next_cursor":"c1.2024-01-01.4","prev_cursor":"c1.2024-01-02.4","direction":"next","cursor_column":"created_at","total":5}}
+{"_note":"hand-built to mirror the fake backend envelope; not a recorded response","success":true,"data":[{"id":4}],"meta":{"request_id":"req-short","cursor":"c1.2024-01-02.3","next_cursor":"c1.2024-01-01.4","prev_cursor":"c1.2024-01-02.4","direction":"next","cursor_column":"created_at","total":5}}

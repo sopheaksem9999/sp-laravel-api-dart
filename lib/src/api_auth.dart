@@ -3,7 +3,8 @@ class ApiAuth {
   /// Asynchronously resolves headers to add to outgoing requests (e.g. `Authorization`).
   final Future<Map<String, String>> Function() headers;
 
-  /// Hook called once when a 401 Unauthorized response is received.
+  /// Hook called once when a 401 Unauthorized response is received, or when a
+  /// 200 `{success: false, error_code: 10002}` envelope is received.
   ///
   /// Should return `true` if recovery/refresh was successful and the request
   /// should be retried once with fresh headers.

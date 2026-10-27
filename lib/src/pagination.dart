@@ -3,7 +3,11 @@ class CursorPage<T> {
   /// The deserialized items on the current page.
   final List<T> items;
 
-  /// The cursor to pass to retrieve the next page, or null if this is the final page.
+  /// The cursor to pass to retrieve the next page.
+  ///
+  /// The backend sends `next_cursor` on every non-empty page, so a non-null
+  /// value does not mean more data exists: the real end is an empty page.
+  /// Null when the response carries no `next_cursor` (for example offset mode).
   final String? nextCursor;
 
   /// The cursor to pass to retrieve the previous page.
@@ -15,7 +19,8 @@ class CursorPage<T> {
   /// Additional metadata returned by the API envelope.
   final Map<String, dynamic> meta;
 
-  /// Whether there are additional items available on subsequent pages.
+  /// Whether a [nextCursor] is available. This is not a guarantee that another
+  /// page has items: the final page after the last item is returned empty.
   bool get hasMore => nextCursor != null;
 
   /// Creates a [CursorPage].
@@ -28,6 +33,8 @@ class CursorPage<T> {
   });
 
   /// Factory creating [CursorPage] from raw JSON envelope items and metadata.
+  ///
+  /// [perPage] is unused and kept only for compatibility.
   factory CursorPage.fromResponse({
     required List<dynamic> data,
     required Map<String, dynamic> meta,

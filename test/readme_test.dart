@@ -8,7 +8,11 @@ void main() {
   test('README has no beta install snippet', () {
     expect(readme, isNot(contains('^0.1.0-beta')));
     expect(readme, isNot(contains('ref: v0.1.0-beta')));
-    expect(readme, contains('sp_laravel_api: ^0.1.0'));
+    final version = RegExp(
+      r'^version:\s*(\S+)',
+      multiLine: true,
+    ).firstMatch(File('pubspec.yaml').readAsStringSync())!.group(1)!;
+    expect(readme, contains('sp_laravel_api: ^$version'));
   });
 
   for (final entry in {

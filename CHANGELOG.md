@@ -9,12 +9,18 @@
 - **Behaviour change:** `CursorPage.nextCursor` is now `meta['next_cursor']` whenever the backend provides it, regardless of item count (previously only on full pages). It is null when absent; offset mode still yields no cursor.
 - `RecordEvent` now exposes `eventName` (the broadcast event name), `raw` (the full payload as broadcast) and `isRecord` (true only when the payload has a string `table` and a map `record`). Non-record events such as `courier_location.updated` are delivered to the `subscribe` handler with all fields in `raw`. A non-map `record` no longer yields surprises: it gives an empty `record` and `isRecord == false`.
 - **Behaviour change:** added `RecordAction.unknown`. A payload with a missing or unrecognised `action` now maps to `unknown` instead of `created`. Exhaustive `switch` statements over `RecordAction` need a new case.
-
 - `TableGateway.list/get/create/update/patch/remove/restore/upsert` accept optional `Options? options` and `CancelToken? cancelToken`, forwarded to `SpApi.request` (per-request headers win over tenant/auth headers). Existing calls are unchanged.
 - `SpApi.rpc` accepts optional `query` (query parameters), `method` (override; default stays POST with a body, GET otherwise) and `options` (Dio `Options` merged into the request).
 - **BREAKING (behaviour change):** `SpApi.request` now throws `SpApiError` (status stays the HTTP status, e.g. 200) when a response with status < 400 has a JSON map body with `success: false`. Error code 10002 on such a response is routed through `ApiAuth.handleUnauthorized()` and retried once, like a 401. Bytes responses and non-map bodies are unaffected. Opt out with `SpApi(treatSuccessFalseAsError: false)` to restore the 0.1.0 behaviour.
 - `SpApiError.retryAfter` now also reads `errors.retry_after_seconds` (first element, int or numeric string; zero or negative ignored) as a last fallback after the `Retry-After` header and body `retry_after`. The value remains in `fieldErrors`.
 - `SpApiError` now carries the transport `cause` and `stackTrace` (the originating `DioException`) for status 0 failures, plus `isTransport` / `isHttp` getters. `toString()` never prints the cause.
+
+- `iterate()`, `fetchFirst()`, `fetchLast()` and `cursorPagination().firstPage()` now send `cursor=` (cursor mode) so the backend returns `next_cursor`; `fetchPrev` sends `direction=prev`; `fetchLast` keeps `prevCursor` null on a single short page. `list` with a `null` cursor is unchanged (offset mode).
+- `CursorPage.nextCursor` / `hasMore`: the backend sends `next_cursor` on every non-empty page, so the real end of the data is an empty page; docs updated.
+- **Behaviour change:** `SpApiError.isTransport` is now true only for `network` and `timeout` errors with `status == 0`; local errors (for example a missing `select`) also have status 0 but are not transport failures.
+- A `200` `success: false` envelope now maps `error_code` to `SpApiError.code` (10002 unauthenticated, 10008 forbidden, 10009 notFound, 10004 validation, 10010 server; others unknown).
+- Retried multipart uploads (after a 401, a 10002 envelope or a `RetryConfig` retry) now send a fresh `FormData` clone instead of failing with "already finalized".
+- Release note: the release containing the breaking `treatSuccessFalseAsError` default should be versioned 0.2.0.
 
 ## 0.1.0 (2026-10-27)
 

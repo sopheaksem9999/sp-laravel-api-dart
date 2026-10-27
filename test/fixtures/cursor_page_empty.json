@@ -1,1 +1,1 @@
-{"success":true,"data":[],"meta":{"request_id":"req-empty","cursor":"c1.2024-01-01.4","next_cursor":null,"prev_cursor":null,"direction":"next","cursor_column":"created_at","total":5}}
+{"_note":"hand-built to mirror the fake backend envelope; not a recorded response","success":true,"data":[],"meta":{"request_id":"req-empty","cursor":"c1.2024-01-01.4","next_cursor":null,"prev_cursor":null,"direction":"next","cursor_column":"created_at","total":5}}

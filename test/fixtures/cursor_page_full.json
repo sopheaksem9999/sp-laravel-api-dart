@@ -1,1 +1,1 @@
-{"success":true,"data":[{"id":1},{"id":2}],"meta":{"request_id":"req-full","cursor":"0","next_cursor":"c1.2024-01-02.2","prev_cursor":null,"direction":"next","cursor_column":"created_at","total":5}}
+{"_note":"hand-built to mirror the fake backend envelope; not a recorded response","success":true,"data":[{"id":1},{"id":2}],"meta":{"request_id":"req-full","cursor":"0","next_cursor":"c1.2024-01-02.2","prev_cursor":null,"direction":"next","cursor_column":"created_at","total":5}}

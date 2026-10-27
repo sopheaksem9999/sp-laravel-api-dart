@@ -89,7 +89,7 @@ Future<void> errorSamples(SpApi api) async {
 
 Future<void> paginationSamples(TableGateway<Invoice> invoices) async {
   // Cursor pagination.
-  var page = await invoices.list(select: 'id,number', perPage: 50);
+  var page = await invoices.list(select: 'id,number', perPage: 50, cursor: '');
   while (true) {
     for (final invoice in page.items) {
       print(invoice.number);

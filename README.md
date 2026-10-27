@@ -87,7 +87,7 @@ final api = SpApi(
 ```
 
 > [!WARNING]
-> Do not also call `attach(dio)` on the same `Dio`. `attach(dio)` installs a second refreshing interceptor, so a 401 would be handled twice. Use either `ApiAuth` with `headers`/`handleUnauthorized`, or `attach(dio)`, never both. See the Flutter mobile section of the [`sp_jwt_auth` README](../sp-jwt-auth-dart/README.md).
+> Do not also call `attach(dio)` on the same `Dio`. `attach(dio)` installs a second refreshing interceptor, so a 401 would be handled twice. Use either `ApiAuth` with `headers`/`handleUnauthorized`, or `attach(dio)`, never both. See the Flutter mobile section of the [`sp_jwt_auth` README](https://github.com/sopheaksem9999/sp-jwt-auth-dart#flutter-mobile).
 
 ## RPC calls
 
@@ -116,11 +116,11 @@ Every failure is an `SpApiError`. Tests: [`test/core/api_errors_test.dart`](test
 | --- | --- |
 | `status` | HTTP status; `0` for transport failures (no response). |
 | `code` | `SpApiErrorCode`: `unauthenticated`, `forbidden`, `notFound`, `validation`, `tenantRequired`, `moduleDisabled`, `notConfigured`, `unencodableValue`, `rateLimited`, `server`, `network`, `timeout`, `unknown`. |
-| `errorCode` | Backend numeric code (for example `10002`). |
+| `errorCode` | Backend numeric code (for example `10002`). On a `200` `success: false` envelope, `code` is mapped from it: `10002` unauthenticated, `10008` forbidden, `10009` notFound, `10004` validation, `10010` server; anything else is `unknown`. |
 | `fieldErrors` | `Map<String, List<String>>` of per-field validation messages. |
 | `requestId` | Backend request id, for support tickets. |
 | `retryAfter` | Seconds to wait: the `Retry-After` header, then body `retry_after`, then `errors.retry_after_seconds`. |
-| `isTransport` / `isHttp` | `status == 0` / `status > 0`. |
+| `isTransport` / `isHttp` | `isTransport` is true for `network` and `timeout` failures (`status == 0`, no response); local errors such as a missing `select` also have `status == 0` but are not transport failures. `isHttp` is `status > 0`. |
 | `cause` / `stackTrace` | The originating `DioException` for transport failures. `toString()` never prints the cause. |
 
 ```dart
@@ -155,12 +155,12 @@ final api = SpApi(
 
 `list` supports cursor and offset modes. Tests: [`test/core/cursor_test.dart`](test/core/cursor_test.dart) and [`test/core/table_gateway_test.dart`](test/core/table_gateway_test.dart).
 
-- **Cursor:** pass `cursor`, optionally `direction` (`next` or `prev`) and `cursorColumn`; they are sent as `cursor=`, `direction=` and `cursor_column=`. An empty cursor is sent as `cursor=` (first page); `null` sends none. `nextCursor` is `meta['next_cursor']` whenever the backend provides it, whatever the item count, and `null` otherwise.
+- **Cursor:** pass `cursor`, optionally `direction` (`next` or `prev`) and `cursorColumn`; they are sent as `cursor=`, `direction=` and `cursor_column=`. An empty cursor is sent as `cursor=` (first page); `null` sends none. `nextCursor` is `meta['next_cursor']` whenever the backend provides it, whatever the item count, and `null` otherwise; the backend sends it on every non-empty page, so the end of the data is an empty page. Sending no `cursor` means offset mode, which never returns a `nextCursor`, so start a cursor loop with `cursor: ''` (`iterate`, `fetchFirst` and `cursorPagination().firstPage()` do this for you).
 - **Offset:** pass `page` (and `total: true` for a count). Offset mode never yields a `nextCursor`.
 
 ```dart
 // Cursor pagination.
-var page = await invoices.list(select: 'id,number', perPage: 50);
+var page = await invoices.list(select: 'id,number', perPage: 50, cursor: '');
 while (true) {
   for (final invoice in page.items) {
     print(invoice.number);
@@ -196,7 +196,7 @@ await invoices.list(requireSelect: false);
 
 ## Upsert availability
 
-`TableGateway.upsert` posts to `{table}/upsert?match_on=...`. Many backends disable it: a `404` or `405` means upsert is off for that table, so fall back to `update`/`create`. A `404` surfaces as `SpApiErrorCode.notFound` ([`test/core/api_errors_test.dart`](test/core/api_errors_test.dart)); per-request options are forwarded ([`test/core/table_gateway_options_test.dart`](test/core/table_gateway_options_test.dart)).
+`TableGateway.upsert` posts to `{table}/upsert?match_on=...`. Many backends disable it: a `404` (or `405` on some hosts) typically means upsert is disabled, so fall back to `update`/`create`. A `404` surfaces as `SpApiErrorCode.notFound` ([`test/core/api_errors_test.dart`](test/core/api_errors_test.dart)); per-request options are forwarded ([`test/core/table_gateway_options_test.dart`](test/core/table_gateway_options_test.dart)).
 
 ```dart
 try {
