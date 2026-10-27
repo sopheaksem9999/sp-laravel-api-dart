@@ -1,0 +1,114 @@
+[
+  {
+    "name": "basic eq and in with quoting",
+    "query": {
+      "select": "id,name,status",
+      "where": [
+        {"type": "eq", "col": "status", "val": "active"},
+        {"type": "in", "col": "category", "vals": ["news", "updates"]}
+      ],
+      "perPage": 20
+    },
+    "expected": {
+      "select": "id,name,status",
+      "status": "eq.active",
+      "category": "in.(news,updates)",
+      "per_page": "20"
+    }
+  },
+  {
+    "name": "quoted strings with comma, quotes, backslashes",
+    "query": {
+      "select": "id",
+      "where": [
+        {"type": "eq", "col": "name", "val": "Acme, Inc."},
+        {"type": "in", "col": "tags", "vals": ["Acme, Inc.", "B"]},
+        {"type": "eq", "col": "quote", "val": "say \"hi\""},
+        {"type": "eq", "col": "path", "val": "a\\b"},
+        {"type": "eq", "col": "spaced", "val": " lead"}
+      ]
+    },
+    "expected": {
+      "select": "id",
+      "name": "eq.\"Acme, Inc.\"",
+      "tags": "in.(\"Acme, Inc.\",B)",
+      "quote": "eq.\"say \\\"hi\\\"\"",
+      "path": "eq.\"a\\\\b\"",
+      "spaced": "eq.\" lead\"",
+      "per_page": "25"
+    }
+  },
+  {
+    "name": "empty in list emits in.()",
+    "query": {
+      "select": "id",
+      "where": [
+        {"type": "in", "col": "status", "vals": []}
+      ]
+    },
+    "expected": {
+      "select": "id",
+      "status": "in.()",
+      "per_page": "25"
+    }
+  },
+  {
+    "name": "sort and cursor pagination",
+    "query": {
+      "select": "id",
+      "sort": {"field": "created_at", "order": "desc"},
+      "cursor": "cur_12345",
+      "total": true
+    },
+    "expected": {
+      "select": "id",
+      "sortby": "created_at",
+      "order": "desc",
+      "cursor": "cur_12345",
+      "total": "true",
+      "per_page": "25"
+    }
+  },
+  {
+    "name": "null or empty cursor becomes 0",
+    "query": {
+      "select": "id",
+      "cursor": ""
+    },
+    "expected": {
+      "select": "id",
+      "cursor": "0",
+      "per_page": "25"
+    }
+  },
+  {
+    "name": "or group serialization",
+    "query": {
+      "select": "id",
+      "or": [
+        {"type": "eq", "col": "status", "val": "draft"},
+        {"type": "lt", "col": "due_date", "val": "2026-11-01"}
+      ]
+    },
+    "expected": {
+      "select": "id",
+      "or": "(status.eq.draft,due_date.lt.2026-11-01)",
+      "per_page": "25"
+    }
+  },
+  {
+    "name": "multiple conditions on same column merged into and=()",
+    "query": {
+      "select": "id",
+      "where": [
+        {"type": "gte", "col": "total", "val": 100},
+        {"type": "lt", "col": "total", "val": 500}
+      ]
+    },
+    "expected": {
+      "select": "id",
+      "and": "(total.gte.100,total.lt.500)",
+      "per_page": "25"
+    }
+  }
+]
