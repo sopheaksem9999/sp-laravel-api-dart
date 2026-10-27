@@ -98,16 +98,29 @@ class SpApi {
   }) => TableGateway<T>(api: this, name: name, fromJson: fromJson);
 
   /// Executes an RPC call to `{rpcPrefix}/{name}`.
+  ///
+  /// [query] is sent as query parameters, [method] overrides the default
+  /// (`POST` when [body] is given, otherwise `GET`), and [options] is merged
+  /// into the underlying request.
   Future<T> rpc<T>(
     String name, {
     Map<String, dynamic>? body,
+    Map<String, dynamic>? query,
+    String? method,
+    Options? options,
     T Function(dynamic)? fromJson,
   }) async {
     final cleanPrefix = rpcPrefix.replaceAll(RegExp(r'^/+|/+$'), '');
     final cleanName = name.replaceAll(RegExp(r'^/+'), '');
     final path = cleanPrefix.isEmpty ? cleanName : '$cleanPrefix/$cleanName';
 
-    final res = await request(body != null ? 'POST' : 'GET', path, data: body);
+    final res = await request(
+      method ?? (body != null ? 'POST' : 'GET'),
+      path,
+      data: body,
+      queryParameters: query,
+      options: options,
+    );
 
     final raw = res.data;
     dynamic payload = raw;

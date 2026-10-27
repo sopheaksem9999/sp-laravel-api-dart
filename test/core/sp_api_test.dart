@@ -199,4 +199,84 @@ void main() {
       expect(utf8.decode(bytes), equals('PDF_BYTES_DATA'));
     });
   });
+
+  group('SpApi.rpc query, method and options', () {
+    SpApi build(void Function(RequestOptions) record, {dynamic data}) {
+      final dio = Dio();
+      dio.interceptors.add(
+        InterceptorsWrapper(
+          onRequest: (options, handler) {
+            record(options);
+            handler.resolve(
+              Response(
+                requestOptions: options,
+                statusCode: 200,
+                data:
+                    data ??
+                    {
+                      'success': true,
+                      'data': {'progress': 50},
+                    },
+              ),
+            );
+          },
+        ),
+      );
+      return SpApi(baseUrl: Uri.parse('https://example.com/api/v1'), dio: dio);
+    }
+
+    test('query is sent as GET query parameters', () async {
+      RequestOptions? rec;
+      final api = build((o) => rec = o);
+      await api.rpc<Map<String, dynamic>>(
+        'orders/checkProgress',
+        query: {'order_id': 'o1'},
+      );
+      expect(rec!.method, equals('GET'));
+      expect(
+        rec!.uri.toString(),
+        equals(
+          'https://example.com/api/v1/rpc/orders/checkProgress?order_id=o1',
+        ),
+      );
+    });
+
+    test('method POST without body sends POST', () async {
+      RequestOptions? rec;
+      final api = build((o) => rec = o);
+      await api.rpc<Map<String, dynamic>>(
+        'orders/checkProgress',
+        method: 'POST',
+      );
+      expect(rec!.method, equals('POST'));
+    });
+
+    test('options headers are merged into the request', () async {
+      RequestOptions? rec;
+      final api = build((o) => rec = o);
+      await api.rpc<Map<String, dynamic>>(
+        'orders/checkProgress',
+        options: Options(headers: {'X-Custom': 'abc'}),
+      );
+      expect(rec!.headers['X-Custom'], equals('abc'));
+    });
+
+    test('existing body-only call still POSTs', () async {
+      RequestOptions? rec;
+      final api = build((o) => rec = o);
+      await api.rpc<Map<String, dynamic>>('orders/create', body: {'a': 1});
+      expect(rec!.method, equals('POST'));
+      expect(rec!.data, equals({'a': 1}));
+      expect(rec!.queryParameters, isEmpty);
+    });
+
+    test('data envelope is still unwrapped', () async {
+      final api = build((_) {});
+      final res = await api.rpc<Map<String, dynamic>>(
+        'orders/checkProgress',
+        query: {'order_id': 'o1'},
+      );
+      expect(res, equals({'progress': 50}));
+    });
+  });
 }
