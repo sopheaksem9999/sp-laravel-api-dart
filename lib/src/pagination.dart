@@ -15,6 +15,9 @@ class CursorPage<T> {
   /// Additional metadata returned by the API envelope.
   final Map<String, dynamic> meta;
 
+  /// Whether there are additional items available on subsequent pages.
+  bool get hasMore => nextCursor != null;
+
   /// Creates a [CursorPage].
   const CursorPage({
     required this.items,
