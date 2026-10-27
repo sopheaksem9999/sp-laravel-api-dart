@@ -2,13 +2,20 @@ name: Release
 
 on:
   push:
-    branches: [main, develop]
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
 
 jobs:
-  publish-check:
+  verify-and-release:
+    name: Verify & Create Release
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - uses: dart-lang/setup-dart@v1
         with:
@@ -17,5 +24,23 @@ jobs:
       - name: Install dependencies
         run: dart pub get
 
-      - name: Dry run pub publish
-        run: dart pub publish --dry-run
+      - name: Verify formatting
+        run: dart format --output=none --set-exit-if-changed .
+
+      - name: Analyze project
+        run: dart analyze --fatal-infos
+
+      - name: Check forbidden imports and neutral names
+        run: dart run tool/check.dart
+        env:
+          FORBIDDEN_NAMES: ${{ secrets.FORBIDDEN_NAMES }}
+
+      - name: Run tests
+        run: dart test
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          draft: false
+          prerelease: ${{ contains(github.ref, '-beta') || contains(github.ref, '-alpha') || contains(github.ref, '-rc') }}
