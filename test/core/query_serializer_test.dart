@@ -100,6 +100,18 @@ void main() {
         ),
       );
 
+      // The error message names the opt-out.
+      expect(
+        () => serializeQuery(requireSelect: true),
+        throwsA(
+          isA<SpApiError>().having(
+            (e) => e.message,
+            'message',
+            contains('requireSelect: false'),
+          ),
+        ),
+      );
+
       // Opt out with requireSelect: false or Select.all
       final res = serializeQuery(requireSelect: false);
       expect(res.containsKey('select'), isFalse);

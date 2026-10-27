@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Docs: README install snippet now targets `^0.1.0`; new sections for `rpc`, `SpApiError`, the `success: false` envelope, pagination, the select rule, `upsert` availability, retries, per-request options, attachments, realtime recovery and pairing with `sp_jwt_auth`. Samples are compile-checked in `example/readme_samples.dart` and guarded by `test/readme_test.dart`. The missing-`select` error names `requireSelect: false`.
 - `AttachmentsModule.upload` (multipart form POST to `sp_attachments/rpc/upload`, `bytes` or `filePath`, `visibility` default `private`), `link` / `unlink` for record attachments, and `viewBytes` (authenticated `GET rpc/{id}/view`). Signed-URL methods and URL builders are unchanged.
 - `TableGateway.list` and `serializeQuery` accept `direction` (`next` or `prev`) and `cursorColumn`, sent as `direction=` and `cursor_column=`.
 - **Behaviour change:** an empty `cursor` is now sent as `cursor=` (empty string) instead of being remapped to `0`; the backend treats both as the first page. `cursor: null` still sends no cursor.

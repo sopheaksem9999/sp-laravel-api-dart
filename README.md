@@ -27,7 +27,7 @@ Add `sp_laravel_api` to your `pubspec.yaml`:
 
 ```yaml
 dependencies:
-  sp_laravel_api: ^0.1.0-beta.2
+  sp_laravel_api: ^0.1.0
 ```
 
 Or install from git:
@@ -37,7 +37,7 @@ dependencies:
   sp_laravel_api:
     git:
       url: https://github.com/sopheaksem9999/sp-laravel-api-dart.git
-      ref: v0.1.0-beta.2
+      ref: v0.1.0
 ```
 
 ## Quick Start
@@ -72,6 +72,186 @@ for (final invoice in page.items) {
 }
 ```
 
+## Pairing with sp_jwt_auth
+
+Hand the auth object's two functions to `ApiAuth`. `SpApi` then adds the bearer header and, on a 401, calls `handleUnauthorized` once and retries.
+
+```dart
+final api = SpApi(
+  baseUrl: Uri.parse('https://api.example.com/api/v1'),
+  auth: ApiAuth(
+    headers: auth.headers,
+    handleUnauthorized: auth.handleUnauthorized,
+  ),
+);
+```
+
+> [!WARNING]
+> Do not also call `attach(dio)` on the same `Dio`. `attach(dio)` installs a second refreshing interceptor, so a 401 would be handled twice. Use either `ApiAuth` with `headers`/`handleUnauthorized`, or `attach(dio)`, never both. See the Flutter mobile section of the [`sp_jwt_auth` README](../sp-jwt-auth-dart/README.md).
+
+## RPC calls
+
+`rpc` calls `{rpcPrefix}/{name}` (prefix defaults to `rpc`). It sends `POST` when a `body` is given and `GET` otherwise; `method`, `query` and Dio `options` override that. A `{data: ...}` envelope is unwrapped before `fromJson` runs. Covered by [`test/core/sp_api_test.dart`](test/core/sp_api_test.dart) and [`test/core/table_gateway_options_test.dart`](test/core/table_gateway_options_test.dart).
+
+```dart
+// POST rpc/invoices/send with a JSON body.
+final sent = await api.rpc<Map<String, dynamic>>(
+  'invoices/send',
+  body: {'invoice_id': 7},
+);
+
+// GET rpc/reports/summary?year=2026, mapped into a typed value.
+final total = await api.rpc<int>(
+  'reports/summary',
+  query: {'year': 2026},
+  fromJson: (data) => (data as Map<String, dynamic>)['total'] as int,
+);
+```
+
+## Errors: SpApiError
+
+Every failure is an `SpApiError`. Tests: [`test/core/api_errors_test.dart`](test/core/api_errors_test.dart) and [`test/core/api_transport_error_test.dart`](test/core/api_transport_error_test.dart).
+
+| Field | Meaning |
+| --- | --- |
+| `status` | HTTP status; `0` for transport failures (no response). |
+| `code` | `SpApiErrorCode`: `unauthenticated`, `forbidden`, `notFound`, `validation`, `tenantRequired`, `moduleDisabled`, `notConfigured`, `unencodableValue`, `rateLimited`, `server`, `network`, `timeout`, `unknown`. |
+| `errorCode` | Backend numeric code (for example `10002`). |
+| `fieldErrors` | `Map<String, List<String>>` of per-field validation messages. |
+| `requestId` | Backend request id, for support tickets. |
+| `retryAfter` | Seconds to wait: the `Retry-After` header, then body `retry_after`, then `errors.retry_after_seconds`. |
+| `isTransport` / `isHttp` | `status == 0` / `status > 0`. |
+| `cause` / `stackTrace` | The originating `DioException` for transport failures. `toString()` never prints the cause. |
+
+```dart
+try {
+  await api.table('invoices', fromJson: Invoice.fromJson).create({
+    'number': '',
+  });
+} on SpApiError catch (e) {
+  if (e.isTransport) {
+    print('Network failure: ${e.cause}');
+  } else if (e.code == SpApiErrorCode.validation) {
+    print(e.fieldErrors['number']);
+  } else if (e.retryAfter != null) {
+    print('Retry in ${e.retryAfter} seconds');
+  }
+  print('Request id for support: ${e.requestId}');
+}
+```
+
+### Envelope behaviour (`success: false`)
+
+A response with status below 400 whose JSON body is a map with `success: false` is raised as `SpApiError` (its `status` stays the HTTP status, for example 200). `error_code` `10002` on such a response goes through `ApiAuth.handleUnauthorized()` and is retried once, like a 401. Bytes and non-map bodies are unaffected. This is on by default; to restore the 0.1.0 behaviour, set `treatSuccessFalseAsError: false`. Tests: [`test/core/api_envelope_test.dart`](test/core/api_envelope_test.dart).
+
+```dart
+final api = SpApi(
+  baseUrl: Uri.parse('https://api.example.com/api/v1'),
+  treatSuccessFalseAsError: false,
+);
+```
+
+## Pagination
+
+`list` supports cursor and offset modes. Tests: [`test/core/cursor_test.dart`](test/core/cursor_test.dart) and [`test/core/table_gateway_test.dart`](test/core/table_gateway_test.dart).
+
+- **Cursor:** pass `cursor`, optionally `direction` (`next` or `prev`) and `cursorColumn`; they are sent as `cursor=`, `direction=` and `cursor_column=`. An empty cursor is sent as `cursor=` (first page); `null` sends none. `nextCursor` is `meta['next_cursor']` whenever the backend provides it, whatever the item count, and `null` otherwise.
+- **Offset:** pass `page` (and `total: true` for a count). Offset mode never yields a `nextCursor`.
+
+```dart
+// Cursor pagination.
+var page = await invoices.list(select: 'id,number', perPage: 50);
+while (true) {
+  for (final invoice in page.items) {
+    print(invoice.number);
+  }
+  final next = page.nextCursor;
+  if (next == null) break;
+  page = await invoices.list(select: 'id,number', perPage: 50, cursor: next);
+}
+
+// Offset pagination.
+final second = await invoices.list(
+  select: 'id,number',
+  page: 2,
+  perPage: 50,
+  total: true,
+);
+print(second.total);
+```
+
+## The select rule
+
+Reads must say which columns they want. Omitting `select` throws `SpApiError` (`unencodableValue`) with a message that names the opt-out `requireSelect: false`. Relations are embedded in the `select` string: `rel(*)` for all columns of a relation, `rel(col,child(...))` for nested ones. Tests: [`test/core/query_serializer_test.dart`](test/core/query_serializer_test.dart).
+
+```dart
+// Columns and relations.
+await invoices.list(select: 'id,number,customer(*)');
+await invoices.list(select: 'id,number,lines(id,qty,product(id,name))');
+
+// Explicit opt-out.
+await invoices.list(select: Select.all);
+await invoices.list(requireSelect: false);
+```
+
+## Upsert availability
+
+`TableGateway.upsert` posts to `{table}/upsert?match_on=...`. Many backends disable it: a `404` or `405` means upsert is off for that table, so fall back to `update`/`create`. A `404` surfaces as `SpApiErrorCode.notFound` ([`test/core/api_errors_test.dart`](test/core/api_errors_test.dart)); per-request options are forwarded ([`test/core/table_gateway_options_test.dart`](test/core/table_gateway_options_test.dart)).
+
+```dart
+try {
+  await invoices.upsert({'number': 'INV-1'}, matchOn: ['number']);
+} on SpApiError catch (e) {
+  if (e.status == 404 || e.status == 405) {
+    print('upsert is disabled on this backend');
+  } else {
+    rethrow;
+  }
+}
+```
+
+## Retries
+
+Retries are off by default. Configure `RetryConfig` on `SpApi` and only `GET`/`HEAD` are retried (statuses 408, 429, 502, 503, 504 and connection errors, with exponential backoff, jitter and `Retry-After`). Pass `retry: true` per request to retry a non-idempotent call, or `retry: false` to skip. Tests: [`test/core/api_retry_test.dart`](test/core/api_retry_test.dart).
+
+```dart
+final api = SpApi(
+  baseUrl: Uri.parse('https://api.example.com/api/v1'),
+  retry: const RetryConfig(maxAttempts: 3),
+);
+```
+
+```dart
+await api.request('POST', 'invoices', data: {'number': 'INV-2'}, retry: true);
+await api.request('GET', 'invoices', retry: false);
+```
+
+## Per-request options
+
+Every `TableGateway` method (`list`, `get`, `create`, `update`, `patch`, `remove`, `restore`, `upsert`) accepts Dio `Options` and a `CancelToken`. Per-request headers win over tenant and auth headers. Tests: [`test/core/table_gateway_options_test.dart`](test/core/table_gateway_options_test.dart).
+
+```dart
+final cancel = CancelToken();
+final page = await invoices.list(
+  select: 'id,number',
+  options: Options(headers: {'X-Request-Source': 'mobile'}),
+  cancelToken: cancel,
+);
+// Later, e.g. when the screen closes: cancel.cancel();
+```
+
+## Attachments
+
+`upload` sends one multipart POST (`bytes` or `filePath`, `visibility` defaults to `private`); `link`/`unlink` attach a file to a record; `viewBytes` fetches protected content with your auth headers. Tests: [`test/modules/attachments_upload_test.dart`](test/modules/attachments_upload_test.dart).
+
+```dart
+final bytes = Uint8List.fromList([1, 2, 3]);
+final file = await attachments.upload(bytes: bytes, filename: 'scan.pdf');
+await attachments.link('invoices', 7, file['id'].toString());
+final content = await attachments.viewBytes(file['id'].toString());
+await attachments.unlink('invoices', 7, file['id'].toString());
+```
+
 ## Realtime Broadcasting
 
 ```dart
@@ -101,6 +281,40 @@ final unsubscribe = await rt.subscribe(
 unsubscribe();
 ```
 
+### Non-record events
+
+`RecordEvent` exposes `eventName`, `raw` (the full payload) and `isRecord` (true only for a string `table` plus a map `record`). A missing or unknown `action` maps to `RecordAction.unknown`. Tests: [`test/realtime/raw_event_test.dart`](test/realtime/raw_event_test.dart).
+
+```dart
+await rt.subscribe(
+  'private-tenant.42',
+  events: {'invoices.updated', 'courier_location.updated'},
+  onEvent: (event) {
+    if (event.isRecord) {
+      print('${event.table}: ${event.action.name}');
+    } else {
+      print('${event.eventName}: ${event.raw}');
+    }
+  },
+);
+```
+
+### Realtime recovery
+
+After a socket death the client reconnects, re-authorizes private channels and re-subscribes. Hook your app in with `onDisconnected`, `onRecovered` (refetch what you missed), `onAppPaused`/`onAppResumed` and `onNetworkChanged`. Tests: [`test/realtime/realtime_lifecycle_test.dart`](test/realtime/realtime_lifecycle_test.dart) and [`test/realtime/fake_pusher_integration_test.dart`](test/realtime/fake_pusher_integration_test.dart).
+
+```dart
+rt.onDisconnected(() => print('socket lost'));
+rt.onRecovered(() async {
+  // Channels are re-authorized and re-subscribed; refetch missed data.
+});
+
+// Wire these to your app lifecycle and connectivity plugin.
+rt.onAppPaused();
+rt.onAppResumed();
+rt.onNetworkChanged(true);
+```
+
 ## Typegen CLI
 
 Generate immutable Dart model classes from an OpenAPI 3.x specification:
@@ -114,5 +328,5 @@ dart run sp_laravel_api:typegen --file path/to/openapi.json --out lib/src/models
 - **Rung 1 (In-Process Fake Pusher Server):** Verified in automated integration tests (`test/realtime/fake_pusher_integration_test.dart`) exercising real TCP/WebSocket handshakes, private auth subscriptions, event dispatches, and socket death auto-recovery.
 - **Rung 2 (Local Reverb Server Harness):** Contract test suite (`test/contract/reverb_contract_test.dart`) executable against local Laravel Reverb via `contract/reverb-harness/run-harness.sh --dart`.
 - **Rung 3 (Diagnostic Probe Tool):** CLI probe tool (`tool/reverb_probe.dart`) for probing and validating live Reverb or Soketi instances.
-- **Automated Tests:** 77 tests passing (unit, REST modules, realtime, typegen, wire characterization).
+- **Automated Tests:** unit, REST modules, realtime, typegen, wire characterization and README checks (`dart test`).
 - **Public-Repo Hygiene:** Zero forbidden internal names; automated secret scanning with Gitleaks.
