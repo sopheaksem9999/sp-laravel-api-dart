@@ -233,5 +233,72 @@ void main() {
         expect(client.isConnected, isTrue);
       },
     );
+
+    test(
+      'a late confirmation after a timeout does not mark the channel confirmed',
+      () async {
+        client = build(subscribeTimeout: const Duration(milliseconds: 100));
+        server.withholdConfirmations = true;
+        await client.connect();
+
+        await expectLater(
+          client.subscribe('private-orders.1', onEvent: (_) {}),
+          throwsA(isA<SpApiError>()),
+        );
+        server.releaseWithheld(); // late confirmation of the abandoned frame
+        await tick();
+
+        var done = false;
+        final again = client
+            .subscribe('private-orders.1', onEvent: (_) {})
+            .then((u) {
+              done = true;
+              return u;
+            });
+        await tick();
+        expect(server.subscribeRequests, [
+          'private-orders.1',
+          'private-orders.1',
+        ]);
+        expect(done, isFalse);
+
+        server.releaseWithheld();
+        await again;
+        expect(done, isTrue);
+      },
+    );
+
+    test(
+      'a rejoin whose confirmation is withheld is retried, reported once and does not block recovery',
+      () async {
+        client = build(subscribeTimeout: const Duration(milliseconds: 100));
+        var recovered = 0;
+        client.onRecovered(() async => recovered++);
+        await client.connect();
+        await client.subscribe('private-orders.1', onEvent: (_) {});
+        expect(server.subscribeRequests, hasLength(1));
+
+        server.withholdConfirmations = true;
+        server.simulateSocketDeath(client.socketId!);
+        await tick(900);
+
+        expect(server.subscribeRequests, hasLength(1 + 3));
+        expect(failures, hasLength(1));
+        expect(failures.single.$1, 'private-orders.1');
+        expect(failures.single.$2, isA<SpApiError>());
+        expect(recovered, 1);
+
+        await tick(300);
+        expect(server.subscribeRequests, hasLength(1 + 3));
+        expect(failures, hasLength(1));
+
+        // No stale pending: a later subscribe sends a real frame and works.
+        server.withholdConfirmations = false;
+        await client
+            .subscribe('private-orders.1', onEvent: (_) {})
+            .timeout(const Duration(seconds: 2));
+        expect(server.subscribeRequests, hasLength(1 + 3 + 1));
+      },
+    );
   });
 }

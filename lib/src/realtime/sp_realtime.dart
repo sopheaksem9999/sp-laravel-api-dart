@@ -226,7 +226,11 @@ class SpRealtime {
       case 'pusher_internal:subscription_succeeded':
         if (frame.channel != null) {
           final channel = frame.channel!;
-          _confirmedChannels.add(channel);
+          // A confirmation for a channel nobody is subscribed to (an abandoned
+          // attempt arriving late) must not mark it confirmed.
+          if (_intents[channel]?.isNotEmpty ?? false) {
+            _confirmedChannels.add(channel);
+          }
           _failedRejoins.remove(channel);
           final pending = _pendingSubscribes.remove(channel);
           if (pending != null && !pending.isCompleted) pending.complete();
@@ -346,7 +350,20 @@ class SpRealtime {
     var delay = subscribeBackoff;
     for (var attempt = 1; ; attempt++) {
       try {
+        final pending = _pendingFor(channel);
         await _sendSubscribe(channel);
+        // Each attempt is bounded: no confirmation in time is a failed attempt.
+        try {
+          await pending.future.timeout(subscribeTimeout);
+        } on TimeoutException {
+          throw SpApiError(
+            status: 0,
+            code: SpApiErrorCode.timeout,
+            message:
+                'Timed out after ${subscribeTimeout.inMilliseconds} ms waiting '
+                'for re-subscription confirmation of "$channel"',
+          );
+        }
         return;
       } catch (error, stack) {
         if (_rejoinStale(channel, epoch)) return;
