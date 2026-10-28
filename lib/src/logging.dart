@@ -19,7 +19,7 @@ enum SpLogMode {
   /// Only requests carrying the [SpLog.on] marker are logged (default).
   perRequest,
 
-  /// Every request is logged.
+  /// Every request is logged, except those marked with [SpLog.off].
   all,
 }
 
@@ -127,7 +127,15 @@ class SpLogEntry {
 /// table.list(select: 'id', options: SpLog.on(bodies: true));
 /// ```
 ///
-/// To combine with other per-request options use [merge], or
+/// [off] keeps one request out of the log, even in [SpLogMode.all] (the
+/// equivalent of `log: false` in the JS client):
+///
+/// ```dart
+/// api.request('GET', 'health', options: SpLog.off());
+/// ```
+///
+/// To combine with other per-request options use [merge] (`off: true` for
+/// the off marker), or
 /// `options.copyWith(extra: {...?options.extra, ...SpLog.on().extra!})`.
 class SpLog {
   SpLog._();
@@ -137,14 +145,21 @@ class SpLog {
   static Options on({bool headers = false, bool bodies = false}) =>
       Options(extra: {_extraKey: _marker(headers, bodies)});
 
+  /// Options keeping a request out of the log in every [SpLogMode],
+  /// [SpLogMode.all] included.
+  static Options off() => Options(extra: {_extraKey: false});
+
   /// Returns [base] (or fresh options) with the logging marker added, keeping
   /// every other option, including its headers and other `extra` entries.
+  /// With [off] the marker is the [SpLog.off] one ([headers] and [bodies] are
+  /// then ignored); either marker replaces one already in [base].
   static Options merge(
     Options? base, {
     bool headers = false,
     bool bodies = false,
+    bool off = false,
   }) => (base ?? Options()).copyWith(
-    extra: {...?base?.extra, _extraKey: _marker(headers, bodies)},
+    extra: {...?base?.extra, _extraKey: off ? false : _marker(headers, bodies)},
   );
 
   static Map<String, bool> _marker(bool headers, bool bodies) => {
@@ -410,6 +425,7 @@ SpLogSession? startLog(
   try {
     final mode = logger.mode;
     final marker = options?.extra?[_extraKey];
+    if (marker == false) return null; // SpLog.off(): never logged
     final opted = marker != null;
     if (mode == SpLogMode.off || (mode == SpLogMode.perRequest && !opted)) {
       return null;

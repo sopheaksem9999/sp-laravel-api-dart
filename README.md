@@ -280,7 +280,7 @@ final page = await invoices.list(
 );
 ```
 
-Combine it with other options using `SpLog.merge(options, bodies: true)`, or `options.copyWith(extra: {...?options.extra, ...SpLog.on().extra!})`.
+Combine it with other options using `SpLog.merge(options, bodies: true)`, or `options.copyWith(extra: {...?options.extra, ...SpLog.on().extra!})`. `SpLog.off()` keeps one request out of the log in every mode, `SpLogMode.all` included (`SpLog.merge(options, off: true)` to combine it).
 
 What to know before you ship it:
 

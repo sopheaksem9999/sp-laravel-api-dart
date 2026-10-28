@@ -531,6 +531,57 @@ void main() {
       expect(h.seen.last.headers['X-Trace'], 'abc');
     });
 
+    test(
+      'SpLog.off disables logging for one request, even in all mode',
+      () async {
+        final h = _Harness([
+          _ok({'ok': true}),
+        ]);
+        final all = h.api(mode: SpLogMode.all);
+        final res = await all.request('GET', 'invoices', options: SpLog.off());
+        expect(res.data, {'ok': true});
+        expect(h.entries, isEmpty);
+        await all.request('GET', 'invoices');
+        expect(h.entries, hasLength(1));
+
+        await h.api().request('GET', 'invoices', options: SpLog.off());
+        expect(h.entries, hasLength(1));
+        expect(h.seen, hasLength(3));
+        expect(
+          h.seen.first.headers.keys.map((k) => k.toLowerCase()),
+          isNot(contains('sp.log')),
+        );
+      },
+    );
+
+    test('SpLog.off composes with other per-request options', () async {
+      final h = _Harness([
+        _ok({'ok': true}),
+      ]);
+      final api = h.api(mode: SpLogMode.all);
+      final base = Options(headers: {'X-Trace': 'abc'}, extra: {'mine': 1});
+      final merged = SpLog.merge(base, off: true);
+      await api.request('GET', 'invoices', options: merged);
+      expect(h.seen.single.headers['X-Trace'], 'abc');
+      expect(h.seen.single.extra['mine'], 1);
+      expect(h.entries, isEmpty);
+
+      // an off marker replaces an earlier on marker, and the copyWith form works too
+      await api.request(
+        'GET',
+        'invoices',
+        options: SpLog.merge(SpLog.on(bodies: true), off: true),
+      );
+      await api.request(
+        'GET',
+        'invoices',
+        options: base.copyWith(extra: {...?base.extra, ...SpLog.off().extra!}),
+      );
+      expect(h.seen, hasLength(3));
+      expect(h.entries, isEmpty);
+      expect(base.extra, {'mine': 1});
+    });
+
     test('works through TableGateway options', () async {
       final h = _Harness([
         _ok(<String, dynamic>{'data': <Object>[], 'meta': <String, dynamic>{}}),
