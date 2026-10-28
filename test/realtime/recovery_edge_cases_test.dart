@@ -137,6 +137,9 @@ void main() {
           t.autoConfirm = false;
           t.drop();
           await until(() => events.length >= 2);
+          // negative window: no later recovered or failed event (longer than
+          // the 20 ms subscribe timeout times the 3 attempts, plus backoff)
+          await _tick(150);
           await rt.dispose();
         } finally {
           done.complete();

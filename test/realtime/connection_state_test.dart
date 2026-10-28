@@ -314,6 +314,10 @@ void main() {
       await rt.connect();
 
       await until(() => disconnects >= 1 && rt.isConnected);
+      // negative window: no second drop. 100 ms is longer than the 20 ms
+      // activity timeout plus the 20 ms pong timeout, so the new socket is
+      // pinged (and answers) at least once inside it.
+      await _tick(100);
       expect(disconnects, 1);
       expect(t.closeCount, 1);
       expect(t.connectCount, 2);
@@ -363,6 +367,8 @@ void main() {
       final rt = _client(
         t,
         reconnectDelay: const Duration(milliseconds: 5),
+        // short, so the negative window below covers a ping on the new socket
+        activityTimeout: const Duration(milliseconds: 20),
         pongTimeout: const Duration(milliseconds: 20),
       );
       var disconnects = 0;
@@ -376,6 +382,9 @@ void main() {
       rt.onAppResumed(forceStale: true);
       expect(t.framesSent('pusher:ping'), 1);
       await until(() => disconnects >= 1 && rt.isConnected);
+      // negative window: no second drop. 100 ms is longer than the 20 ms
+      // activity timeout plus the 20 ms pong timeout.
+      await _tick(100);
       expect(disconnects, 1);
       expect(t.connectCount, 2);
       expect(rt.isConnected, isTrue);
