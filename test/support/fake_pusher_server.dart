@@ -10,6 +10,24 @@ class FakePusherServer {
 
   final Map<String, WebSocket> _sockets = {};
   final Map<String, Set<String>> _socketChannels = {};
+  final List<(String, String)> _withheld = [];
+
+  /// When true, `pusher:subscribe` frames are recorded but not confirmed
+  /// until [releaseWithheld] is called. Defaults to false (confirm at once).
+  bool withholdConfirmations = false;
+
+  /// When set, `/broadcasting/auth` answers with this HTTP status and no
+  /// signature. Defaults to null (authorize).
+  int? authFailureStatus;
+
+  /// Channels of every `pusher:subscribe` frame received, in order.
+  final List<String> subscribeRequests = [];
+
+  /// Channels of every `pusher:unsubscribe` frame received, in order.
+  final List<String> unsubscribeRequests = [];
+
+  /// Number of `/broadcasting/auth` requests received.
+  int authRequests = 0;
 
   /// Creates a [FakePusherServer] listening on [_requestedPort] (0 for ephemeral port).
   FakePusherServer({int port = 0}) : _requestedPort = port;
@@ -41,6 +59,16 @@ class FakePusherServer {
 
     // Handle broadcasting auth endpoints
     if (request.uri.path.endsWith('/broadcasting/auth')) {
+      authRequests++;
+      final failure = authFailureStatus;
+      if (failure != null) {
+        request.response
+          ..statusCode = failure
+          ..headers.contentType = ContentType.json
+          ..write(jsonEncode({'message': 'denied'}));
+        await request.response.close();
+        return;
+      }
       request.response
         ..statusCode = HttpStatus.ok
         ..headers.contentType = ContentType.json
@@ -88,15 +116,19 @@ class FakePusherServer {
           if (event == 'pusher:subscribe') {
             final channel = data['channel'] as String?;
             if (channel != null) {
+              subscribeRequests.add(channel);
               _socketChannels[socketId]?.add(channel);
-              // Send subscription confirmation
-              socket.add(
-                jsonEncode({
-                  'event': 'pusher_internal:subscription_succeeded',
-                  'channel': channel,
-                  'data': '{}',
-                }),
-              );
+              if (withholdConfirmations) {
+                _withheld.add((socketId, channel));
+              } else {
+                _confirm(socket, channel);
+              }
+            }
+          } else if (event == 'pusher:unsubscribe') {
+            final channel = data['channel'] as String?;
+            if (channel != null) {
+              unsubscribeRequests.add(channel);
+              _socketChannels[socketId]?.remove(channel);
             }
           } else if (event == 'pusher:ping') {
             socket.add(jsonEncode({'event': 'pusher:pong', 'data': '{}'}));
@@ -111,6 +143,26 @@ class FakePusherServer {
       },
       cancelOnError: false,
     );
+  }
+
+  void _confirm(WebSocket socket, String channel) {
+    socket.add(
+      jsonEncode({
+        'event': 'pusher_internal:subscription_succeeded',
+        'channel': channel,
+        'data': '{}',
+      }),
+    );
+  }
+
+  /// Sends the confirmations held back by [withholdConfirmations].
+  void releaseWithheld() {
+    final held = List.of(_withheld);
+    _withheld.clear();
+    for (final (socketId, channel) in held) {
+      final socket = _sockets[socketId];
+      if (socket != null) _confirm(socket, channel);
+    }
   }
 
   void _cleanupSocket(String socketId) {

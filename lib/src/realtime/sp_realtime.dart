@@ -51,6 +51,19 @@ class SpRealtime {
   /// Delay before automatically attempting to reconnect after an unexpected disconnect.
   final Duration reconnectDelay;
 
+  /// Maximum time [subscribe] waits for `pusher_internal:subscription_succeeded`.
+  final Duration subscribeTimeout;
+
+  /// Maximum number of attempts to re-subscribe a channel after a reconnect.
+  final int subscribeAttempts;
+
+  /// Initial delay between re-subscribe attempts (doubles, capped at 5 s).
+  final Duration subscribeBackoff;
+
+  /// Called once when a channel could not be re-subscribed after a reconnect
+  /// despite [subscribeAttempts] attempts.
+  final void Function(String channel, Object error)? onSubscribeFailed;
+
   String? _socketId;
   Future<void>? _connectingFuture;
   StreamSubscription<String>? _incomingSub;
@@ -59,6 +72,9 @@ class SpRealtime {
   int _nextSubId = 0;
   final Map<String, List<_SubscriptionIntent>> _intents = {};
   final Set<String> _confirmedChannels = {};
+  final Map<String, Completer<void>> _pendingSubscribes = {};
+  final Set<String> _failedRejoins = {};
+  int _connectionEpoch = 0;
 
   final List<void Function()> _disconnectCallbacks = [];
   final List<Future<void> Function()> _recoveryCallbacks = [];
@@ -119,6 +135,10 @@ class SpRealtime {
     this.activityTimeout = const Duration(seconds: 120),
     this.pongTimeout = const Duration(seconds: 30),
     this.reconnectDelay = const Duration(milliseconds: 100),
+    this.subscribeTimeout = const Duration(seconds: 10),
+    this.subscribeAttempts = 3,
+    this.subscribeBackoff = const Duration(milliseconds: 300),
+    this.onSubscribeFailed,
   }) : _transport = transport ?? WebSocketTransport(),
        dio = dio ?? Dio();
 
@@ -184,6 +204,7 @@ class SpRealtime {
           _socketId = data['socket_id']?.toString();
         }
 
+        _connectionEpoch++;
         _resetActivityTimer();
         if (!connectCompleter.isCompleted) {
           connectCompleter.complete();
@@ -204,7 +225,11 @@ class SpRealtime {
 
       case 'pusher_internal:subscription_succeeded':
         if (frame.channel != null) {
-          _confirmedChannels.add(frame.channel!);
+          final channel = frame.channel!;
+          _confirmedChannels.add(channel);
+          _failedRejoins.remove(channel);
+          final pending = _pendingSubscribes.remove(channel);
+          if (pending != null && !pending.isCompleted) pending.complete();
           _checkRecoveryComplete();
         }
 
@@ -259,7 +284,9 @@ class SpRealtime {
 
   void _handleDisconnect() {
     _socketId = null;
+    _connectionEpoch++;
     _confirmedChannels.clear();
+    _failedRejoins.clear();
     _connectingFuture = null;
     _activityTimer?.cancel();
     _pongTimer?.cancel();
@@ -278,17 +305,64 @@ class SpRealtime {
     }
   }
 
+  Completer<void> _pendingFor(String channel) {
+    return _pendingSubscribes.putIfAbsent(channel, () {
+      final completer = Completer<void>();
+      // Waiters observe the future; do not report an unobserved error.
+      completer.future.ignore();
+      return completer;
+    });
+  }
+
+  void _failPending(String channel, Object error, [StackTrace? stack]) {
+    final pending = _pendingSubscribes.remove(channel);
+    if (pending != null && !pending.isCompleted) {
+      pending.completeError(error, stack);
+    }
+  }
+
   Future<void> _rejoinChannels() async {
     _reconnecting = true;
-    final channels = List.of(_intents.keys);
-
+    final epoch = _connectionEpoch;
+    final channels = _intents.keys
+        .where((c) => _intents[c]?.isNotEmpty ?? false)
+        .toList();
+    // Registered before the first await so a subscriber arriving during the
+    // rejoin awaits this confirmation instead of sending a second frame.
     for (final channel in channels) {
-      if (_intents[channel]?.isNotEmpty ?? false) {
-        try {
-          await _sendSubscribe(channel);
-        } catch (_) {
-          // Bounded retry will be picked up by health check
+      _pendingFor(channel);
+    }
+    await Future.wait(channels.map((c) => _rejoinChannel(c, epoch)));
+  }
+
+  bool _rejoinStale(String channel, int epoch) =>
+      _isDisposed ||
+      epoch != _connectionEpoch ||
+      !isConnected ||
+      !(_intents[channel]?.isNotEmpty ?? false);
+
+  Future<void> _rejoinChannel(String channel, int epoch) async {
+    final attempts = subscribeAttempts < 1 ? 1 : subscribeAttempts;
+    var delay = subscribeBackoff;
+    for (var attempt = 1; ; attempt++) {
+      try {
+        await _sendSubscribe(channel);
+        return;
+      } catch (error, stack) {
+        if (_rejoinStale(channel, epoch)) return;
+        if (attempt >= attempts) {
+          _failedRejoins.add(channel);
+          _failPending(channel, error, stack);
+          onSubscribeFailed?.call(channel, error);
+          _checkRecoveryComplete();
+          return;
         }
+        await Future<void>.delayed(delay);
+        delay = delay * 2;
+        if (delay > const Duration(seconds: 5)) {
+          delay = const Duration(seconds: 5);
+        }
+        if (_rejoinStale(channel, epoch)) return;
       }
     }
   }
@@ -298,6 +372,7 @@ class SpRealtime {
 
     final neededChannels = _intents.keys
         .where((c) => _intents[c]?.isNotEmpty ?? false)
+        .where((c) => !_failedRejoins.contains(c))
         .toSet();
     if (_confirmedChannels.containsAll(neededChannels)) {
       _reconnecting = false;
@@ -309,7 +384,11 @@ class SpRealtime {
 
   /// Subscribes to [channel] and listens for incoming record events.
   ///
-  /// Returns an unsubscribe cancellation callback function.
+  /// Completes only after the server confirms the subscription with
+  /// `pusher_internal:subscription_succeeded`. Throws [SpApiError] with code
+  /// `timeout` when no confirmation arrives within [subscribeTimeout], or the
+  /// channel authorization error; in both cases no subscription intent is
+  /// left registered. Returns an unsubscribe cancellation callback function.
   Future<void Function()> subscribe(
     String channel, {
     Set<String>? events,
@@ -327,15 +406,62 @@ class SpRealtime {
       onEvent: onEvent,
     );
 
-    final isFirstForChannel =
-        !_intents.containsKey(channel) || _intents[channel]!.isEmpty;
+    // Register before sending so an event delivered right after the
+    // confirmation is not lost.
     _intents.putIfAbsent(channel, () => []).add(intent);
 
-    if (isFirstForChannel) {
-      await _sendSubscribe(channel);
+    if (_confirmedChannels.contains(channel)) {
+      return () => _unsubscribe(channel, id);
     }
 
+    Completer<void>? pending = _pendingSubscribes[channel];
+    if (pending == null) {
+      pending = _pendingFor(channel);
+      final owned = pending;
+      try {
+        await _sendSubscribe(channel);
+      } catch (error, stack) {
+        if (identical(_pendingSubscribes[channel], owned)) {
+          _pendingSubscribes.remove(channel);
+        }
+        if (!owned.isCompleted) owned.completeError(error, stack);
+        _abandon(channel, id, sendUnsubscribe: false);
+        rethrow;
+      }
+    }
+
+    try {
+      await pending.future.timeout(subscribeTimeout);
+    } on TimeoutException {
+      _abandon(channel, id, sendUnsubscribe: true);
+      throw SpApiError(
+        status: 0,
+        code: SpApiErrorCode.timeout,
+        message:
+            'Timed out after ${subscribeTimeout.inMilliseconds} ms waiting for '
+            'subscription confirmation of "$channel"',
+      );
+    } catch (_) {
+      _abandon(channel, id, sendUnsubscribe: false);
+      rethrow;
+    }
     return () => _unsubscribe(channel, id);
+  }
+
+  /// Removes the intent [id] after a failed subscribe. When it was the last
+  /// intent of the channel, also drops the pending completer and the channel.
+  void _abandon(String channel, int id, {required bool sendUnsubscribe}) {
+    final list = _intents[channel];
+    if (list == null) return;
+    list.removeWhere((i) => i.id == id);
+    if (list.isNotEmpty) return;
+    _intents.remove(channel);
+    _confirmedChannels.remove(channel);
+    _failedRejoins.remove(channel);
+    _pendingSubscribes.remove(channel);
+    if (sendUnsubscribe && isConnected) {
+      _transport.send(PusherFrame.unsubscribe(channel: channel).toJsonString());
+    }
   }
 
   Future<void> _sendSubscribe(String channel) async {
@@ -413,6 +539,15 @@ class SpRealtime {
     if (list.isEmpty) {
       _intents.remove(channel);
       _confirmedChannels.remove(channel);
+      _failedRejoins.remove(channel);
+      _failPending(
+        channel,
+        const SpApiError(
+          status: 0,
+          code: SpApiErrorCode.unknown,
+          message: 'Subscription cancelled before it was confirmed',
+        ),
+      );
       if (isConnected) {
         final frame = PusherFrame.unsubscribe(channel: channel);
         _transport.send(frame.toJsonString());
@@ -463,6 +598,16 @@ class SpRealtime {
     await _incomingSub?.cancel();
     await _doneSub?.cancel();
     await _transport.close();
+    for (final channel in List.of(_pendingSubscribes.keys)) {
+      _failPending(
+        channel,
+        const SpApiError(
+          status: 0,
+          code: SpApiErrorCode.network,
+          message: 'Realtime client disposed',
+        ),
+      );
+    }
     _intents.clear();
     _confirmedChannels.clear();
     _disconnectCallbacks.clear();

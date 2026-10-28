@@ -10,6 +10,7 @@ class FakeRealtimeTransport implements RealtimeTransport {
   final List<String> sentMessages = [];
   bool isConnected = false;
   int connectCount = 0;
+  bool autoConfirm = true;
 
   @override
   Stream<String> get incoming => _incomingController.stream;
@@ -38,6 +39,20 @@ class FakeRealtimeTransport implements RealtimeTransport {
   @override
   void send(String data) {
     sentMessages.add(data);
+    // Like a real server, confirm every subscribe frame.
+    final frame = PusherFrame.parse(data);
+    if (frame.event == 'pusher:subscribe' && autoConfirm) {
+      final channel = (frame.data as Map)['channel'];
+      Future.microtask(() {
+        _incomingController.add(
+          jsonEncode({
+            'event': 'pusher_internal:subscription_succeeded',
+            'channel': channel,
+            'data': '{}',
+          }),
+        );
+      });
+    }
   }
 
   @override
