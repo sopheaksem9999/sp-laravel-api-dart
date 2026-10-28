@@ -311,7 +311,7 @@ await rt.subscribe(
 
 ### Realtime recovery
 
-After a socket death the client reconnects, re-authorizes private channels and re-subscribes. A failed connect is retried after `reconnectDelay`, doubling per consecutive failure up to 5 s. Hook your app in with `onDisconnected`, `onRecovered` (refetch what you missed), `onAppPaused`/`onAppResumed` and `onNetworkChanged`. Tests: [`test/realtime/realtime_lifecycle_test.dart`](test/realtime/realtime_lifecycle_test.dart) and [`test/realtime/fake_pusher_integration_test.dart`](test/realtime/fake_pusher_integration_test.dart).
+After a socket death the client reconnects, re-authorizes private channels and re-subscribes. A failed connect is retried after `reconnectDelay`, doubling per consecutive failure up to 5 s. Hook your app in with `onDisconnected`, `onRecovered` (refetch what you missed), `onAppPaused`/`onAppResumed` and `onNetworkChanged`. `onAppResumed` and `onNetworkChanged` reconnect only a client in use (started with `connect()` or `subscribe()` and not stopped with `disconnect()`): they never connect a fresh client or revive one you disconnected, and do nothing after `dispose()`. Tests: [`test/realtime/realtime_lifecycle_test.dart`](test/realtime/realtime_lifecycle_test.dart), [`test/realtime/connection_state_test.dart`](test/realtime/connection_state_test.dart) and [`test/realtime/fake_pusher_integration_test.dart`](test/realtime/fake_pusher_integration_test.dart).
 
 ```dart
 rt.onDisconnected(() => print('socket lost'));

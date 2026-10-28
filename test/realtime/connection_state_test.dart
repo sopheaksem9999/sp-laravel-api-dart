@@ -202,4 +202,82 @@ void main() {
       await failed;
     });
   });
+
+  group('lifecycle and network events', () {
+    test('a fresh client is not connected by an online or resume event', () async {
+      final t = ScriptedTransport();
+      final rt = _client(t, reconnectDelay: const Duration(milliseconds: 5));
+
+      rt.onNetworkChanged(true);
+      rt.onAppResumed(forceStale: true);
+      await _tick(50);
+
+      expect(t.connectCount, 0);
+      expect(rt.isConnected, isFalse);
+      await rt.dispose();
+    });
+
+    test(
+      'after disconnect() resume and online events do not reconnect',
+      () async {
+        final t = ScriptedTransport();
+        final rt = _client(t, reconnectDelay: const Duration(milliseconds: 5));
+        await rt.subscribe('public-orders', onEvent: (_) {});
+        await rt.disconnect();
+
+        rt.onAppPaused();
+        rt.onAppResumed();
+        rt.onAppResumed(forceStale: true);
+        rt.onNetworkChanged(false);
+        rt.onNetworkChanged(true);
+        await _tick(50);
+
+        expect(t.connectCount, 1);
+        expect(rt.isConnected, isFalse);
+        expect(t.framesSent('pusher:subscribe'), 1);
+
+        // An explicit connect() still works and rejoins.
+        await rt.connect();
+        await _tick();
+        expect(t.framesSent('pusher:subscribe'), 2);
+        await rt.dispose();
+      },
+    );
+
+    test(
+      'after dispose() resume and online events neither throw nor connect',
+      () async {
+        final t = ScriptedTransport();
+        final rt = _client(t, reconnectDelay: const Duration(milliseconds: 5));
+        await rt.connect();
+        rt.onNetworkChanged(false);
+        t.drop();
+        await _tick();
+        await rt.dispose();
+
+        expect(() => rt.onNetworkChanged(true), returnsNormally);
+        expect(() => rt.onAppResumed(forceStale: true), returnsNormally);
+        await _tick(50);
+        expect(t.connectCount, 1);
+      },
+    );
+
+    test(
+      'a client whose connect failed while offline connects when back online',
+      () async {
+        final t = ScriptedTransport()..failConnects = 1;
+        final rt = _client(t, reconnectDelay: const Duration(milliseconds: 5));
+        rt.onNetworkChanged(false);
+        await expectLater(rt.connect(), throwsA(isA<StateError>()));
+        await _tick(50);
+        expect(t.connectCount, 1); // offline: no retry scheduled
+
+        rt.onNetworkChanged(true);
+        await _tick();
+        expect(t.connectCount, 2);
+        expect(rt.isConnected, isTrue);
+        await rt.dispose();
+      },
+    );
+  });
 }

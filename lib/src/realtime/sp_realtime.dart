@@ -90,9 +90,17 @@ class SpRealtime {
   Timer? _reconnectTimer;
   bool _isDisposed = false;
   bool _reconnecting = false;
-  bool _manualDisconnect = false;
+
+  /// True from [connect] (which [subscribe] calls) until [disconnect] or
+  /// [dispose]: the app wants a live socket, so a drop, a resume or an
+  /// online event may reconnect it. A fresh client, or one the app
+  /// disconnected, stays down.
+  bool _wantsConnection = false;
   DateTime? _pausedAt;
   bool _isOffline = false;
+
+  /// Whether a drop, resume or online event may (re)connect on its own.
+  bool get _mayAutoConnect => _wantsConnection && !_isDisposed && !_isOffline;
 
   /// Signals that the application or page has paused or moved to the background.
   void onAppPaused() {
@@ -101,7 +109,9 @@ class SpRealtime {
 
   /// Signals that the application or page has resumed to the foreground.
   ///
-  /// Runs a health check and triggers immediate reconnect if stale or disconnected.
+  /// Runs a health check and triggers immediate reconnect if stale or
+  /// disconnected. Does nothing for a client that is not in use: one that
+  /// was never connected, or was stopped with [disconnect] or [dispose].
   void onAppResumed({bool? forceStale}) {
     final now = DateTime.now();
     final wasStale =
@@ -110,23 +120,22 @@ class SpRealtime {
             now.difference(_pausedAt!) > const Duration(seconds: 30));
     _pausedAt = null;
 
+    if (!_mayAutoConnect) return;
     if (!isConnected || wasStale || !isHealthy) {
-      if (!_isOffline) {
-        _reconnectNow();
-      }
+      _reconnectNow();
     }
   }
 
   /// Signals network connectivity transitions.
   ///
   /// When [online] is false, suspends reconnect attempts to conserve resources.
-  /// When [online] is true, triggers an immediate reconnect attempt if disconnected.
+  /// When [online] is true, triggers an immediate reconnect attempt if
+  /// disconnected. Like [onAppResumed], it never connects a client that is
+  /// not in use.
   void onNetworkChanged(bool online) {
     _isOffline = !online;
-    if (online) {
-      if (!isConnected) {
-        _reconnectNow();
-      }
+    if (online && !isConnected && _mayAutoConnect) {
+      _reconnectNow();
     }
   }
 
@@ -162,7 +171,7 @@ class SpRealtime {
     if (_isDisposed) {
       throw StateError('Cannot connect a disposed SpRealtime client.');
     }
-    _manualDisconnect = false;
+    _wantsConnection = true;
     _reconnectTimer?.cancel();
     _reconnectTimer = null;
     if (isConnected) {
@@ -212,10 +221,10 @@ class SpRealtime {
   void _scheduleReconnect() {
     _reconnectTimer?.cancel();
     _reconnectTimer = null;
-    if (_isDisposed || _isOffline || _manualDisconnect) return;
+    if (!_mayAutoConnect) return;
     _reconnectTimer = Timer(_nextReconnectDelay(), () {
       _reconnectTimer = null;
-      if (!_isDisposed && !_isOffline && !_manualDisconnect && !isConnected) {
+      if (_mayAutoConnect && !isConnected) {
         _reconnectNow();
       }
     });
@@ -663,8 +672,11 @@ class SpRealtime {
   }
 
   /// Manually disconnects from the broadcasting server and stops auto-reconnect.
+  ///
+  /// Resume and online events do not reconnect it either; call [connect] (or
+  /// [subscribe]) to start again.
   Future<void> disconnect() async {
-    _manualDisconnect = true;
+    _wantsConnection = false;
     _reconnectTimer?.cancel();
     _reconnectTimer = null;
     _connectFailures = 0;
@@ -675,7 +687,7 @@ class SpRealtime {
   /// Closes the connection and releases all resources.
   Future<void> dispose() async {
     _isDisposed = true;
-    _manualDisconnect = true;
+    _wantsConnection = false;
     _reconnectTimer?.cancel();
     _activityTimer?.cancel();
     _pongTimer?.cancel();
