@@ -32,8 +32,9 @@ enum SpLogMode {
 ///
 /// Redaction is built in and cannot be switched off. Only the documented keys
 /// and header-name patterns are redacted: plain-text and stringified-nested
-/// bodies are not scanned, and URL paths and fragments are logged verbatim.
-/// The sink may still receive personal data.
+/// bodies are not scanned, and URL paths are logged verbatim (fragment
+/// `key=value` pairs are redacted like the query). The sink may still receive
+/// personal data.
 class SpLogger {
   /// Receives one entry per HTTP attempt.
   final void Function(SpLogEntry entry) sink;
@@ -57,7 +58,8 @@ class SpLogEntry {
   /// Upper-case HTTP method.
   final String method;
 
-  /// Request URL with sensitive query values and credentials redacted.
+  /// Request URL with sensitive query and fragment values, filter groups
+  /// naming a sensitive column and credentials redacted.
   final String url;
 
   /// HTTP status, or `null` when no response was received.
@@ -165,8 +167,18 @@ const _sensitiveKeys = {
   'apikey',
   'accesstoken',
   'refreshtoken',
+  'pin',
+  'pwd',
+  'pass',
+  'sig',
+  'authorization',
+  'cookie',
 };
-final _sensitiveSuffix = RegExp(r'(token|secret|password|apikey)$');
+// `credential` is singular on purpose: a `credentials` key holding an object
+// is walked, not redacted whole.
+final _sensitiveSuffix = RegExp(
+  r'(tokens?|secrets?|passwords?|passwd|passphrase|passcode|apikeys?|privatekey|secretkey|clientkey|signingkey|encryptionkey|signature|credential|otp|(otp|verification|auth|mfa|reset|recovery|backup)codes?)$',
+);
 const _sensitiveHeaders = {
   'authorization',
   'cookie',
@@ -174,7 +186,7 @@ const _sensitiveHeaders = {
   'x-csrf-token',
 };
 final _sensitiveHeaderRe = RegExp(
-  r'auth|token|key|secret|cookie|session|csrf|xsrf|password|credential',
+  r'auth|token|key|secret|cookie|session|csrf|xsrf|password|credential|signature|pass|otp|jwt|bearer',
   caseSensitive: false,
 );
 const _urlHeaders = {
@@ -184,15 +196,45 @@ const _urlHeaders = {
   'referrer',
   'origin',
 };
+final _linkUrl = RegExp(r'<([^>]*)>');
+final _refreshUrl = RegExp(r'url\s*=\s*', caseSensitive: false);
 
-/// Whether a body or query key is sensitive: lower-cased with `-` and `_`
-/// removed it equals a listed key, ends with token/secret/password/apikey, or
-/// starts with password.
+/// A PostgREST-style filter group (`or=(...)`, `not.and=(...)`).
+final _groupKey = RegExp(r'^(not\.)?(and|or)$');
+
+/// A column inside a filter group: the text before the first `.` after the
+/// start, a `(` or a `,`.
+final _groupColumn = RegExp(r'(?:^|[(,])\s*([^(),.]+)\.');
+
+/// Whether a body or query key is sensitive. The key is lower-cased with `-`
+/// and `_` removed; it is sensitive when it equals a listed key (password,
+/// secret, code, otp, jwt, token, apikey, accesstoken, refreshtoken, pin,
+/// pwd, pass, sig, authorization, cookie), matches the sensitive suffix
+/// (token(s), secret(s), password(s), passwd, passphrase, passcode, apikey(s),
+/// privatekey, secretkey, clientkey, signingkey, encryptionkey, signature,
+/// credential, otp, or code(s) after otp/verification/auth/mfa/reset/
+/// recovery/backup), or starts with password.
 bool isSensitiveKey(String key) {
   final n = key.toLowerCase().replaceAll(RegExp(r'[-_]'), '');
   return _sensitiveKeys.contains(n) ||
       _sensitiveSuffix.hasMatch(n) ||
       n.startsWith('password');
+}
+
+/// `Link` holds URLs in `<...>`; `Refresh` holds one after `url=` (or is
+/// one); the other URL-valued headers are a URL.
+String _redactHeaderValue(String n, String v) {
+  if (_urlHeaders.contains(n)) return redactUrl(v);
+  if (n == 'link') {
+    return v.replaceAllMapped(_linkUrl, (m) => '<${redactUrl(m[1]!)}>');
+  }
+  if (n == 'refresh') {
+    final m = _refreshUrl.firstMatch(v);
+    return m == null
+        ? redactUrl(v)
+        : v.substring(0, m.end) + redactUrl(v.substring(m.end));
+  }
+  return v;
 }
 
 /// Redacts header values by name (case-insensitive), the [tenantHeader] and
@@ -211,9 +253,7 @@ Map<String, String> redactHeaders(
             n == tenant ||
             _sensitiveHeaderRe.hasMatch(n)
         ? _redacted
-        : _urlHeaders.contains(n)
-        ? redactUrl(value)
-        : value;
+        : _redactHeaderValue(n, value);
   });
   return out;
 }
@@ -234,25 +274,38 @@ bool _isSensitiveQueryKey(String rawKey) {
           .any((s) => s.isNotEmpty && isSensitiveKey(s));
 }
 
+/// A filter group (`or`, `and`, `not.or`, `not.and`) whose value names a
+/// sensitive column, at any nesting depth.
+bool _isSensitiveGroup(String rawKey, String rawValue) =>
+    _groupKey.hasMatch(_decode(rawKey)) &&
+    _groupColumn
+        .allMatches(_decode(rawValue))
+        .any((m) => isSensitiveKey(m[1]!));
+
+/// Applied to a query string and to a fragment: `key=value` parts with a
+/// sensitive key, or a sensitive filter group, lose their value.
 String _redactQuery(String qs) => qs
     .split('&')
     .map((part) {
       final i = part.indexOf('=');
-      return i > 0 && _isSensitiveQueryKey(part.substring(0, i))
-          ? '${part.substring(0, i)}=$_redacted'
+      if (i <= 0) return part;
+      final k = part.substring(0, i);
+      return _isSensitiveQueryKey(k) ||
+              _isSensitiveGroup(k, part.substring(i + 1))
+          ? '$k=$_redacted'
           : part;
     })
     .join('&');
 
-/// Redacts sensitive query values and credentials in the authority; the path
-/// and fragment are kept verbatim.
+/// Redacts sensitive query and fragment values and credentials in the
+/// authority; the path is kept verbatim.
 String redactUrl(String url) {
   final hash = url.indexOf('#');
-  final frag = hash < 0 ? '' : url.substring(hash);
+  final frag = hash < 0 ? '' : '#${_redactQuery(url.substring(hash + 1))}';
   final rest = hash < 0 ? url : url.substring(0, hash);
   final q = rest.indexOf('?');
   final head = (q < 0 ? rest : rest.substring(0, q)).replaceFirstMapped(
-    RegExp(r'^([a-z][a-z0-9+.-]*://)[^/?#@]*@', caseSensitive: false),
+    RegExp(r'^([a-z][a-z0-9+.-]*://)[^/?#]*@', caseSensitive: false),
     (m) => '${m[1]}$_redacted@',
   );
   return q < 0

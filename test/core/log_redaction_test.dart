@@ -15,9 +15,9 @@ void main() {
   final urls = (vectors['urls'] as List).cast<Map<String, dynamic>>();
 
   test('the shared fixture has not been cut down', () {
-    expect(headers.length, greaterThan(30));
-    expect(bodies.length, greaterThan(60));
-    expect(urls.length, greaterThan(25));
+    expect(headers.length, greaterThanOrEqualTo(46));
+    expect(bodies.length, greaterThanOrEqualTo(103));
+    expect(urls.length, greaterThanOrEqualTo(43));
   });
 
   group('sensitive body and query keys are redacted at any depth', () {
