@@ -5,6 +5,7 @@ import 'package:sp_laravel_api/sp_laravel_api.dart';
 import 'package:test/test.dart';
 
 import '../support/scripted_transport.dart';
+import '../support/until.dart';
 
 SpRealtime _client(
   ScriptedTransport transport, {
@@ -25,6 +26,10 @@ SpRealtime _client(
 Future<void> _tick([int ms = 20]) =>
     Future<void>.delayed(Duration(milliseconds: ms));
 
+// `_tick` is for yielding to already-scheduled microtasks and for deliberate
+// negative windows (asserting something does NOT happen). Anything that waits
+// for a timer (reconnect delay, activity or pong timeout) uses `until`.
+
 /// Runs [body] in a guarded zone and returns the errors nobody handled.
 Future<List<Object>> _uncaughtErrors(Future<void> Function() body) async {
   final errors = <Object>[];
@@ -43,17 +48,20 @@ Future<List<Object>> _uncaughtErrors(Future<void> Function() body) async {
 
 void main() {
   group('failed connect', () {
-    test('a later connect() tries again instead of returning the failure', () async {
-      final t = ScriptedTransport()..failConnects = 1;
-      final rt = _client(t);
+    test(
+      'a later connect() tries again instead of returning the failure',
+      () async {
+        final t = ScriptedTransport()..failConnects = 1;
+        final rt = _client(t);
 
-      await expectLater(rt.connect(), throwsA(isA<StateError>()));
-      await rt.connect().timeout(const Duration(seconds: 1));
+        await expectLater(rt.connect(), throwsA(isA<StateError>()));
+        await rt.connect().timeout(const Duration(seconds: 1));
 
-      expect(t.connectCount, 2);
-      expect(rt.isConnected, isTrue);
-      await rt.dispose();
-    });
+        expect(t.connectCount, 2);
+        expect(rt.isConnected, isTrue);
+        await rt.dispose();
+      },
+    );
 
     test('a transport that throws synchronously does not stick', () async {
       final t = ScriptedTransport()
@@ -73,7 +81,7 @@ void main() {
       final rt = _client(t, reconnectDelay: const Duration(milliseconds: 5));
 
       await expectLater(rt.connect(), throwsA(isA<StateError>()));
-      await _tick(100);
+      await until(() => t.connectCount == 2 && rt.isConnected);
 
       expect(t.connectCount, 2);
       expect(rt.isConnected, isTrue);
@@ -123,13 +131,17 @@ void main() {
       final rt = _client(t, reconnectDelay: const Duration(milliseconds: 10));
 
       await expectLater(rt.connect(), throwsA(isA<StateError>()));
+      // Rate window (deliberate): backoff must keep the count far below the
+      // ~40 attempts a spin loop would make in 400 ms. Wait for the lower
+      // bound first so a loaded machine delays the test instead of failing it.
+      await until(() => t.connectCount >= 3);
       await _tick(400);
 
       // Without backoff this would be about 40 attempts.
       expect(t.connectCount, inInclusiveRange(3, 8));
       await rt.dispose();
       final after = t.connectCount;
-      await _tick(200);
+      await _tick(200); // negative window: nothing connects after dispose
       expect(t.connectCount, after);
     });
 
@@ -156,7 +168,7 @@ void main() {
             ),
           ),
         );
-        await _tick(100);
+        await until(() => rt.isConnected && t.connectCount == 2);
         expect(rt.isConnected, isTrue);
         expect(t.connectCount, 2);
         // Never connected, so nothing was lost.
@@ -181,7 +193,7 @@ void main() {
         await failed;
 
         t.establish(); // late handshake of the abandoned attempt
-        await _tick(100);
+        await _tick(100); // negative window: it must not revive the client
         expect(rt.isConnected, isFalse);
         expect(t.connectCount, 1);
         await rt.dispose();
@@ -204,18 +216,21 @@ void main() {
   });
 
   group('lifecycle and network events', () {
-    test('a fresh client is not connected by an online or resume event', () async {
-      final t = ScriptedTransport();
-      final rt = _client(t, reconnectDelay: const Duration(milliseconds: 5));
+    test(
+      'a fresh client is not connected by an online or resume event',
+      () async {
+        final t = ScriptedTransport();
+        final rt = _client(t, reconnectDelay: const Duration(milliseconds: 5));
 
-      rt.onNetworkChanged(true);
-      rt.onAppResumed(forceStale: true);
-      await _tick(50);
+        rt.onNetworkChanged(true);
+        rt.onAppResumed(forceStale: true);
+        await _tick(50); // negative window: neither event may connect
 
-      expect(t.connectCount, 0);
-      expect(rt.isConnected, isFalse);
-      await rt.dispose();
-    });
+        expect(t.connectCount, 0);
+        expect(rt.isConnected, isFalse);
+        await rt.dispose();
+      },
+    );
 
     test(
       'after disconnect() resume and online events do not reconnect',
@@ -230,7 +245,7 @@ void main() {
         rt.onAppResumed(forceStale: true);
         rt.onNetworkChanged(false);
         rt.onNetworkChanged(true);
-        await _tick(50);
+        await _tick(50); // negative window: none of these may reconnect
 
         expect(t.connectCount, 1);
         expect(rt.isConnected, isFalse);
@@ -238,7 +253,7 @@ void main() {
 
         // An explicit connect() still works and rejoins.
         await rt.connect();
-        await _tick();
+        await until(() => t.framesSent('pusher:subscribe') == 2);
         expect(t.framesSent('pusher:subscribe'), 2);
         await rt.dispose();
       },
@@ -257,7 +272,7 @@ void main() {
 
         expect(() => rt.onNetworkChanged(true), returnsNormally);
         expect(() => rt.onAppResumed(forceStale: true), returnsNormally);
-        await _tick(50);
+        await _tick(50); // negative window: neither event may connect
         expect(t.connectCount, 1);
       },
     );
@@ -269,11 +284,11 @@ void main() {
         final rt = _client(t, reconnectDelay: const Duration(milliseconds: 5));
         rt.onNetworkChanged(false);
         await expectLater(rt.connect(), throwsA(isA<StateError>()));
-        await _tick(50);
+        await _tick(50); // negative window: offline, so no retry may happen
         expect(t.connectCount, 1); // offline: no retry scheduled
 
         rt.onNetworkChanged(true);
-        await _tick();
+        await until(() => t.connectCount == 2 && rt.isConnected);
         expect(t.connectCount, 2);
         expect(rt.isConnected, isTrue);
         await rt.dispose();
@@ -298,7 +313,7 @@ void main() {
       });
       await rt.connect();
 
-      await _tick(200);
+      await until(() => disconnects >= 1 && rt.isConnected);
       expect(disconnects, 1);
       expect(t.closeCount, 1);
       expect(t.connectCount, 2);
@@ -331,12 +346,12 @@ void main() {
       var disconnects = 0;
       rt.onDisconnected(() => disconnects++);
       await rt.connect();
-      await _tick(60);
+      await until(() => !rt.isHealthy); // the ping went unanswered
       expect(rt.isHealthy, isFalse);
 
       t.answerPings = true;
       rt.onAppResumed();
-      await _tick(5);
+      await until(() => t.connectCount == 2 && rt.isConnected);
       expect(disconnects, 1);
       expect(t.connectCount, 2);
       expect(rt.isConnected, isTrue);
@@ -360,7 +375,7 @@ void main() {
       rt.onAppPaused();
       rt.onAppResumed(forceStale: true);
       expect(t.framesSent('pusher:ping'), 1);
-      await _tick(150);
+      await until(() => disconnects >= 1 && rt.isConnected);
       expect(disconnects, 1);
       expect(t.connectCount, 2);
       expect(rt.isConnected, isTrue);
@@ -375,30 +390,35 @@ void main() {
       rt.onAppPaused();
       rt.onAppResumed(forceStale: true);
       expect(t.framesSent('pusher:ping'), 1);
+      // Negative window, longer than the 20 ms pong timeout: the answered
+      // ping must not drop the socket.
       await _tick(100);
       expect(t.connectCount, 1);
       expect(rt.isHealthy, isTrue);
       await rt.dispose();
     });
 
-    test('a connection made after a drop with a ping in flight is healthy', () async {
-      final t = ScriptedTransport()..answerPings = false;
-      final rt = _client(
-        t,
-        reconnectDelay: const Duration(milliseconds: 5),
-        activityTimeout: const Duration(milliseconds: 200),
-        pongTimeout: const Duration(minutes: 10),
-      );
-      await rt.connect();
-      await _tick(260); // ping sent, no pong
-      expect(rt.isHealthy, isFalse);
+    test(
+      'a connection made after a drop with a ping in flight is healthy',
+      () async {
+        final t = ScriptedTransport()..answerPings = false;
+        final rt = _client(
+          t,
+          reconnectDelay: const Duration(milliseconds: 5),
+          activityTimeout: const Duration(milliseconds: 200),
+          pongTimeout: const Duration(minutes: 10),
+        );
+        await rt.connect();
+        await until(() => !rt.isHealthy); // ping sent, no pong
+        expect(rt.isHealthy, isFalse);
 
-      t.answerPings = true;
-      t.drop();
-      await _tick(50);
-      expect(t.connectCount, 2);
-      expect(rt.isHealthy, isTrue);
-      await rt.dispose();
-    });
+        t.answerPings = true;
+        t.drop();
+        await until(() => t.connectCount == 2 && rt.isHealthy);
+        expect(t.connectCount, 2);
+        expect(rt.isHealthy, isTrue);
+        await rt.dispose();
+      },
+    );
   });
 }

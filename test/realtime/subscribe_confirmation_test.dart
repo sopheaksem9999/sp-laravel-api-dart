@@ -4,6 +4,7 @@ import 'package:sp_laravel_api/sp_laravel_api.dart';
 import 'package:test/test.dart';
 
 import '../support/fake_pusher_server.dart';
+import '../support/until.dart';
 
 void main() {
   group('SpRealtime.subscribe confirmation', () {
@@ -11,8 +12,18 @@ void main() {
     late SpRealtime client;
     late List<(String, Object)> failures;
 
-    Future<void> tick([int ms = 80]) =>
+    /// A real elapsed wait, only for asserting that something does NOT happen
+    /// within a short window after its precondition was awaited with `until`.
+    Future<void> window([int ms = 50]) =>
         Future<void>.delayed(Duration(milliseconds: ms));
+
+    /// Kills the current socket and waits for the client to be connected on a
+    /// new one.
+    Future<void> killAndReconnect() async {
+      final old = client.socketId!;
+      server.simulateSocketDeath(old);
+      await until(() => client.isConnected && client.socketId != old);
+    }
 
     SpRealtime build({
       Duration subscribeTimeout = const Duration(seconds: 10),
@@ -58,8 +69,9 @@ void main() {
           return u;
         },
       );
-      await tick();
+      await until(() => server.subscribeRequests.isNotEmpty);
       expect(server.subscribeRequests, ['private-orders.1']);
+      await window(); // frame received, confirmation withheld: still pending
       expect(done, isFalse);
 
       server.releaseWithheld();
@@ -86,8 +98,9 @@ void main() {
       // Reconnect: no subscribe frame may be sent for the abandoned channel.
       server.withholdConfirmations = false;
       server.subscribeRequests.clear();
-      server.simulateSocketDeath(client.socketId!);
-      await tick(400);
+      await killAndReconnect();
+      await until(() => server.unsubscribeRequests.isNotEmpty);
+      await window(100); // no subscribe frame may follow the reconnect
       expect(client.isConnected, isTrue);
       expect(server.subscribeRequests, isEmpty);
       expect(server.unsubscribeRequests, ['private-orders.1']);
@@ -104,8 +117,8 @@ void main() {
       );
 
       server.authFailureStatus = null;
-      server.simulateSocketDeath(client.socketId!);
-      await tick(400);
+      await killAndReconnect();
+      await window(100); // no rejoin (auth or frame) may follow the reconnect
       expect(client.isConnected, isTrue);
       expect(server.subscribeRequests, isEmpty);
       expect(server.authRequests, 1);
@@ -120,7 +133,8 @@ void main() {
 
         final a = client.subscribe('private-orders.1', onEvent: (_) {});
         final b = client.subscribe('private-orders.1', onEvent: (_) {});
-        await tick();
+        await until(() => server.subscribeRequests.isNotEmpty);
+        await window(); // a second subscriber must not send a second frame
         expect(server.subscribeRequests, ['private-orders.1']);
 
         server.releaseWithheld();
@@ -138,7 +152,7 @@ void main() {
         final authBefore = server.authRequests;
 
         await client.subscribe('private-orders.1', onEvent: (_) {});
-        await tick();
+        await window(); // no frame or auth request may follow
         expect(server.subscribeRequests, ['private-orders.1']);
         expect(server.authRequests, authBefore);
       },
@@ -157,7 +171,7 @@ void main() {
           'table': 'orders',
           'record': {'id': '7'},
         });
-        await tick();
+        await until(() => events.isNotEmpty);
         expect(events, hasLength(1));
         expect(events.single.record['id'], '7');
       },
@@ -175,7 +189,7 @@ void main() {
 
         server.authFailureStatus = 500;
         server.simulateSocketDeath(client.socketId!);
-        await tick(600);
+        await until(() => failures.isNotEmpty && recovered == 1);
 
         expect(client.isConnected, isTrue);
         expect(server.authRequests, 1 + 3);
@@ -184,7 +198,7 @@ void main() {
         expect(failures.single.$2, isA<SpApiError>());
 
         // No further retries after giving up.
-        await tick(300);
+        await window(150); // backoff is 10 ms: a further retry would show here
         expect(server.authRequests, 1 + 3);
         expect(failures, hasLength(1));
         // A given-up channel does not block recovery forever.
@@ -201,12 +215,11 @@ void main() {
       );
 
       server.withholdConfirmations = true;
-      server.simulateSocketDeath(client.socketId!);
-      await tick(300);
-      expect(client.isConnected, isTrue);
+      await killAndReconnect();
+      await until(() => server.subscribeRequests.length == 2); // rejoin frame
 
+      // Connected, so subscribe registers its intent synchronously.
       final b = client.subscribe('private-orders.1', onEvent: (_) {});
-      await tick();
       unsubA();
       server.releaseWithheld();
       await b.timeout(const Duration(seconds: 2));
@@ -221,13 +234,11 @@ void main() {
         await client.connect();
 
         final future = client.subscribe('private-orders.1', onEvent: (_) {});
-        await tick();
-        server.simulateSocketDeath(client.socketId!);
-        await tick(300);
+        await until(() => server.subscribeRequests.isNotEmpty);
+        await killAndReconnect();
+        // The rejoin frame on the new socket is withheld too.
+        await until(() => server.subscribeRequests.length == 2);
         server.withholdConfirmations = false;
-        server.releaseWithheld();
-        await tick();
-        // Rejoin on the new socket was withheld too; release it.
         server.releaseWithheld();
         await future.timeout(const Duration(seconds: 2));
         expect(client.isConnected, isTrue);
@@ -245,8 +256,9 @@ void main() {
           client.subscribe('private-orders.1', onEvent: (_) {}),
           throwsA(isA<SpApiError>()),
         );
+        await until(() => server.subscribeRequests.isNotEmpty);
         server.releaseWithheld(); // late confirmation of the abandoned frame
-        await tick();
+        await window(); // let the late confirmation reach the client
 
         var done = false;
         final again = client
@@ -255,11 +267,12 @@ void main() {
               done = true;
               return u;
             });
-        await tick();
+        await until(() => server.subscribeRequests.length == 2);
         expect(server.subscribeRequests, [
           'private-orders.1',
           'private-orders.1',
         ]);
+        await window(); // frame received, confirmation withheld: still pending
         expect(done, isFalse);
 
         server.releaseWithheld();
@@ -280,7 +293,7 @@ void main() {
 
         server.withholdConfirmations = true;
         server.simulateSocketDeath(client.socketId!);
-        await tick(900);
+        await until(() => failures.isNotEmpty && recovered == 1);
 
         expect(server.subscribeRequests, hasLength(1 + 3));
         expect(failures, hasLength(1));
@@ -288,7 +301,7 @@ void main() {
         expect(failures.single.$2, isA<SpApiError>());
         expect(recovered, 1);
 
-        await tick(300);
+        await window(150); // timeout 100 ms: a further retry would show here
         expect(server.subscribeRequests, hasLength(1 + 3));
         expect(failures, hasLength(1));
 

@@ -5,6 +5,7 @@ import 'package:sp_laravel_api/sp_laravel_api.dart';
 import 'package:test/test.dart';
 
 import '../support/scripted_transport.dart';
+import '../support/until.dart';
 
 SpRealtime _client(
   ScriptedTransport transport, {
@@ -26,6 +27,8 @@ SpRealtime _client(
   onSubscribeFailed: onSubscribeFailed,
 );
 
+/// A real elapsed wait: only for deliberate negative windows, or to let an
+/// internal timer (not observable from the test) run out.
 Future<void> _tick([int ms = 30]) =>
     Future<void>.delayed(Duration(milliseconds: ms));
 
@@ -97,12 +100,13 @@ void main() {
 
       t.autoConfirm = false;
       t.drop();
-      await _tick(20); // reconnected, rejoin frame sent
-      expect(t.framesSent('pusher:subscribe', 'public-orders'), 2);
-      await _tick(150); // rejoin attempt 1 timed out, now in backoff
+      await until(() => t.framesSent('pusher:subscribe', 'public-orders') == 2);
+      // The 100 ms rejoin timeout is internal: let it run out, so the attempt
+      // is in its 500 ms backoff.
+      await _tick(150);
       t.confirm('public-orders'); // the late confirmation
 
-      await _tick(600); // past the backoff
+      await _tick(600); // negative window: past the backoff, no more frames
       expect(t.framesSent('pusher:subscribe', 'public-orders'), 2);
       expect(failures, isEmpty);
       await rt.dispose();
@@ -132,7 +136,7 @@ void main() {
 
           t.autoConfirm = false;
           t.drop();
-          await _tick(400);
+          await until(() => events.length >= 2);
           await rt.dispose();
         } finally {
           done.complete();
@@ -158,13 +162,17 @@ void main() {
 
       t.autoConfirm = false;
       t.drop();
-      await _tick(20);
+      await until(
+        () =>
+            t.framesSent('pusher:subscribe', 'public-a') == 2 &&
+            t.framesSent('pusher:subscribe', 'public-b') == 2,
+      );
       t.confirm('public-a');
-      await _tick(5);
+      await _tick(20); // negative window: must not complete early
       expect(recovered, 0); // still waiting for public-b
 
       unsubB();
-      await _tick(5);
+      await until(() => recovered == 1);
       expect(recovered, 1);
       await rt.dispose();
     },
@@ -187,17 +195,25 @@ void main() {
 
       t.autoConfirm = false;
       t.drop();
-      await _tick(20); // rejoin frames sent
+      await until(
+        () =>
+            t.framesSent('pusher:subscribe', 'public-a') == 2 &&
+            t.framesSent('pusher:subscribe', 'public-b') == 2,
+      ); // rejoin frames sent
       t.confirm('public-a');
       final b2 = rt.subscribe('public-b', onEvent: (_) {});
       unsubB1(); // b2 is now the only subscriber of public-b
       await expectLater(
         b2,
         throwsA(
-          isA<SpApiError>().having((e) => e.code, 'code', SpApiErrorCode.timeout),
+          isA<SpApiError>().having(
+            (e) => e.code,
+            'code',
+            SpApiErrorCode.timeout,
+          ),
         ),
       );
-      await _tick(20); // still inside the rejoin backoff
+      await until(() => recovered == 1); // while still in the rejoin backoff
       expect(recovered, 1);
       await rt.dispose();
     },

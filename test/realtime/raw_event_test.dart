@@ -4,6 +4,7 @@ import 'package:sp_laravel_api/sp_laravel_api.dart';
 import 'package:test/test.dart';
 
 import '../support/fake_pusher_server.dart';
+import '../support/until.dart';
 
 void main() {
   group('RecordEvent.fromJson', () {
@@ -82,8 +83,8 @@ void main() {
       );
       events = [];
       await client.connect();
+      // subscribe returns only after the server confirmed the subscription.
       await client.subscribe('private-tenant.10', onEvent: events.add);
-      await Future<void>.delayed(const Duration(milliseconds: 50));
     });
 
     tearDown(() async {
@@ -91,8 +92,8 @@ void main() {
       await server.stop();
     });
 
-    Future<void> settle() =>
-        Future<void>.delayed(const Duration(milliseconds: 100));
+    Future<void> eventsReceived(int count) =>
+        until(() => events.length >= count);
 
     test(
       'order.updated exposes eventName and raw exactly as broadcast',
@@ -104,7 +105,7 @@ void main() {
           'extra': 'kept',
         };
         server.broadcast('private-tenant.10', 'order.updated', payload);
-        await settle();
+        await eventsReceived(1);
         expect(events, hasLength(1));
         expect(events.single.eventName, equals('order.updated'));
         expect(events.single.raw, equals(payload));
@@ -117,7 +118,7 @@ void main() {
         'lat': 11.5,
         'lng': 104.9,
       });
-      await settle();
+      await eventsReceived(1);
       expect(events, hasLength(1));
       final e = events.single;
       expect(e.isRecord, isFalse);
@@ -135,7 +136,7 @@ void main() {
         'action': 'created',
         'record': {'id': '9'},
       });
-      await settle();
+      await eventsReceived(2);
       expect(events, hasLength(2));
       final e = events.last;
       expect(e.isRecord, isTrue);

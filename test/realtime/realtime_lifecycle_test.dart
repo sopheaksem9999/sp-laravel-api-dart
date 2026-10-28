@@ -4,6 +4,8 @@ import 'package:dio/dio.dart';
 import 'package:sp_laravel_api/realtime.dart';
 import 'package:test/test.dart';
 
+import '../support/until.dart';
+
 class MockTransport implements RealtimeTransport {
   final _incomingController = StreamController<String>.broadcast();
   final _doneController = StreamController<void>.broadcast();
@@ -82,7 +84,7 @@ void main() {
 
         // Go back online -> triggers reconnect
         rt.onNetworkChanged(true);
-        await Future<void>.delayed(const Duration(milliseconds: 10));
+        await until(() => transport.connectCount == 2 && rt.isConnected);
 
         expect(transport.connectCount, equals(2));
         expect(rt.isConnected, isTrue);
@@ -118,7 +120,7 @@ void main() {
 
         // App resumed
         rt.onAppResumed(forceStale: true);
-        await Future<void>.delayed(const Duration(milliseconds: 10));
+        await until(() => transport.connectCount == 2 && rt.isConnected);
 
         expect(transport.connectCount, equals(2));
         expect(rt.isConnected, isTrue);
@@ -143,6 +145,7 @@ void main() {
       // Short pause
       rt.onAppPaused();
       rt.onAppResumed(forceStale: false);
+      // Negative window: a healthy socket must not be replaced.
       await Future<void>.delayed(const Duration(milliseconds: 5));
 
       // Socket remained intact, no new connect call

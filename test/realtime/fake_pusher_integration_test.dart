@@ -4,6 +4,7 @@ import 'package:sp_laravel_api/sp_laravel_api.dart';
 import 'package:test/test.dart';
 
 import '../support/fake_pusher_server.dart';
+import '../support/until.dart';
 
 void main() {
   group('FakePusherServer Integration', () {
@@ -60,8 +61,7 @@ void main() {
           },
         );
 
-        // Give server time to process subscription frame
-        await Future<void>.delayed(const Duration(milliseconds: 50));
+        // subscribe returns only after the server confirmed the subscription.
 
         // 3. Server broadcasts an event
         server.broadcast('private-tenant.10', 'invoices.created', {
@@ -71,7 +71,7 @@ void main() {
         });
 
         // Wait for client to receive event
-        await Future<void>.delayed(const Duration(milliseconds: 100));
+        await until(() => eventsReceived.isNotEmpty);
         expect(eventsReceived.length, equals(1));
         expect(eventsReceived.first.table, equals('invoices'));
         expect(eventsReceived.first.action, equals(RecordAction.created));
@@ -94,7 +94,7 @@ void main() {
           'record': {'id': '101', 'amount': 300},
         });
 
-        await Future<void>.delayed(const Duration(milliseconds: 100));
+        await until(() => eventsReceived.length >= 2);
         expect(eventsReceived.length, equals(2));
         expect(eventsReceived.last.action, equals(RecordAction.updated));
         expect(eventsReceived.last.record['amount'], equals(300));
@@ -134,21 +134,18 @@ void main() {
           onEvent: (e) => listB.add(e),
         );
 
-        await Future<void>.delayed(const Duration(milliseconds: 50));
-
         server.broadcast('private-tenant.20', 'users.created', {
           'action': 'created',
           'table': 'users',
           'record': {'id': '1', 'name': 'Alice'},
         });
 
-        await Future<void>.delayed(const Duration(milliseconds: 100));
+        await until(() => listA.isNotEmpty && listB.isNotEmpty);
         expect(listA.length, equals(1));
         expect(listB.length, equals(1));
 
-        // Unsubscribe A
+        // Unsubscribe A (removes its handler synchronously)
         unsubA();
-        await Future<void>.delayed(const Duration(milliseconds: 50));
 
         server.broadcast('private-tenant.20', 'users.updated', {
           'action': 'updated',
@@ -156,7 +153,7 @@ void main() {
           'record': {'id': '1', 'name': 'Alice Updated'},
         });
 
-        await Future<void>.delayed(const Duration(milliseconds: 100));
+        await until(() => listB.length >= 2);
         expect(listA.length, equals(1)); // Did not receive second event
         expect(listB.length, equals(2)); // Still receives events
 
@@ -184,7 +181,7 @@ void main() {
       await client.disconnect();
       expect(client.isConnected, isFalse);
 
-      // Wait past reconnect delay
+      // Negative window, past the reconnect delay: no reconnect may happen.
       await Future<void>.delayed(const Duration(milliseconds: 250));
       expect(client.isConnected, isFalse);
     });
