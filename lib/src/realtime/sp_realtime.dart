@@ -428,11 +428,15 @@ class SpRealtime {
     await Future.wait(channels.map((c) => _rejoinChannel(c, epoch)));
   }
 
+  /// Whether a rejoin of [channel] should stop: the connection changed, the
+  /// channel has no subscriber left, or a (late) confirmation already
+  /// arrived.
   bool _rejoinStale(String channel, int epoch) =>
       _isDisposed ||
       epoch != _connectionEpoch ||
       !isConnected ||
-      !(_intents[channel]?.isNotEmpty ?? false);
+      !(_intents[channel]?.isNotEmpty ?? false) ||
+      _confirmedChannels.contains(channel);
 
   Future<void> _rejoinChannel(String channel, int epoch) async {
     final attempts = subscribeAttempts < 1 ? 1 : subscribeAttempts;
@@ -459,8 +463,13 @@ class SpRealtime {
         if (attempt >= attempts) {
           _failedRejoins.add(channel);
           _failPending(channel, error, stack);
-          onSubscribeFailed?.call(channel, error);
           _checkRecoveryComplete();
+          try {
+            onSubscribeFailed?.call(channel, error);
+          } catch (_) {
+            // An app callback that throws must not surface as an uncaught
+            // error from the rejoin.
+          }
           return;
         }
         await Future<void>.delayed(delay);
@@ -568,6 +577,8 @@ class SpRealtime {
     if (sendUnsubscribe && isConnected) {
       _transport.send(PusherFrame.unsubscribe(channel: channel).toJsonString());
     }
+    // It may have been the last channel a recovery was waiting for.
+    _checkRecoveryComplete();
   }
 
   Future<void> _sendSubscribe(String channel) async {
@@ -658,6 +669,8 @@ class SpRealtime {
         final frame = PusherFrame.unsubscribe(channel: channel);
         _transport.send(frame.toJsonString());
       }
+      // It may have been the last channel a recovery was waiting for.
+      _checkRecoveryComplete();
     }
   }
 
