@@ -231,41 +231,44 @@ void main() {
       expect(pageCount, equals(2));
     });
 
-    test('fetchFirst sends an empty cursor (cursor mode) and fetches first page', () async {
-      final dio = Dio();
-      dio.interceptors.add(
-        InterceptorsWrapper(
-          onRequest: (options, handler) {
-            expect(options.queryParameters['cursor'], equals(''));
-            expect(options.queryParameters['per_page'], equals('1'));
-            handler.resolve(
-              Response(
-                requestOptions: options,
-                statusCode: 200,
-                data: {
-                  'success': true,
-                  'data': [
-                    {'id': 1, 'title': 'First'},
-                  ],
-                  'meta': {'next_cursor': 'cur_2'},
-                },
-              ),
-            );
-          },
-        ),
-      );
+    test(
+      'fetchFirst sends an empty cursor (cursor mode) and fetches first page',
+      () async {
+        final dio = Dio();
+        dio.interceptors.add(
+          InterceptorsWrapper(
+            onRequest: (options, handler) {
+              expect(options.queryParameters['cursor'], equals(''));
+              expect(options.queryParameters['per_page'], equals('1'));
+              handler.resolve(
+                Response(
+                  requestOptions: options,
+                  statusCode: 200,
+                  data: {
+                    'success': true,
+                    'data': [
+                      {'id': 1, 'title': 'First'},
+                    ],
+                    'meta': {'next_cursor': 'cur_2'},
+                  },
+                ),
+              );
+            },
+          ),
+        );
 
-      final api = SpApi(
-        baseUrl: Uri.parse('https://example.com/api/v1'),
-        dio: dio,
-      );
-      final videos = api.table('videos', fromJson: Video.fromJson);
-      final page = await videos.fetchFirst(select: 'id,title', perPage: 1);
+        final api = SpApi(
+          baseUrl: Uri.parse('https://example.com/api/v1'),
+          dio: dio,
+        );
+        final videos = api.table('videos', fromJson: Video.fromJson);
+        final page = await videos.fetchFirst(select: 'id,title', perPage: 1);
 
-      expect(page.items.length, equals(1));
-      expect(page.items[0].id, equals(1));
-      expect(page.nextCursor, equals('cur_2'));
-    });
+        expect(page.items.length, equals(1));
+        expect(page.items[0].id, equals(1));
+        expect(page.nextCursor, equals('cur_2'));
+      },
+    );
 
     test(
       'fetchLast inverts sort direction and restores items to canonical order',

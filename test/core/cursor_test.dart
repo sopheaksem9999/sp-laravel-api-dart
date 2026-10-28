@@ -57,10 +57,10 @@ void main() {
 
     test('omits direction and cursor_column when not given', () async {
       final seen = <RequestOptions>[];
-      await _gateway(seen, _fixture('cursor_page_full.json')).list(
-        select: 'id',
-        cursor: 'c1.x',
-      );
+      await _gateway(
+        seen,
+        _fixture('cursor_page_full.json'),
+      ).list(select: 'id', cursor: 'c1.x');
       expect(seen.single.queryParameters.containsKey('direction'), isFalse);
       expect(seen.single.queryParameters.containsKey('cursor_column'), isFalse);
       expect(seen.single.queryParameters['cursor'], 'c1.x');
