@@ -162,6 +162,24 @@ Future<void> perRequestSamples(TableGateway<Invoice> invoices) async {
   // Later, e.g. when the screen closes: cancel.cancel();
 }
 
+/// Stand-in for Flutter's `debugPrint` so this file compiles as plain Dart.
+void debugPrint(String? message) => print(message);
+
+SpApi loggingSetup() {
+  final api = SpApi(
+    baseUrl: Uri.parse('https://api.example.com/api/v1'),
+    logger: SpLogger(sink: (entry) => debugPrint('$entry')),
+  );
+  return api;
+}
+
+Future<void> loggingSamples(TableGateway<Invoice> invoices) async {
+  final page = await invoices.list(
+    select: 'id,number',
+    options: SpLog.on(bodies: true),
+  );
+}
+
 Future<void> realtimeRecoverySamples(SpRealtime rt) async {
   rt.onDisconnected(() => print('socket lost'));
   rt.onRecovered(() async {

@@ -4,6 +4,7 @@ import 'dart:typed_data';
 import 'package:dio/dio.dart';
 import 'api_auth.dart';
 import 'errors.dart';
+import 'logging.dart';
 import 'table_gateway.dart';
 
 /// Configuration policy for automatic retries on transient errors.
@@ -78,6 +79,10 @@ class SpApi {
   /// Set to `false` to restore the 0.1.0 behaviour (response returned as is).
   final bool treatSuccessFalseAsError;
 
+  /// Optional redacted request logging. `null` (the default) logs nothing and
+  /// leaves the request path unchanged. See [SpLogger] and [SpLog].
+  final SpLogger? logger;
+
   /// The underlying [Dio] HTTP client instance.
   final Dio dio;
 
@@ -89,6 +94,7 @@ class SpApi {
     this.rpcPrefix = 'rpc',
     this.retry,
     this.treatSuccessFalseAsError = true,
+    this.logger,
     Dio? dio,
   }) : dio = dio ?? Dio();
 
@@ -190,6 +196,29 @@ class SpApi {
     bool authRefreshed = false;
     var attempt = 0;
 
+    final log = logger == null
+        ? null
+        : startLog(
+            logger!,
+            method: upperMethod,
+            url: fullUrl,
+            options: options,
+            body: data,
+            tenantHeader: tenant?.header,
+          );
+    var logged = false;
+    void emit(
+      Stopwatch? sw, {
+      Response<dynamic>? res,
+      RequestOptions? ro,
+      SpApiError? err,
+      SpApiErrorCode? failureCode,
+    }) {
+      if (log == null || sw == null) return;
+      logged = true;
+      log.finish(sw, res: res, ro: ro, err: err, failureCode: failureCode);
+    }
+
     for (;;) {
       if (cancelToken != null && cancelToken.isCancelled) {
         throw DioException(
@@ -228,6 +257,8 @@ class SpApi {
           ? data.clone()
           : data;
 
+      logged = false;
+      final sw = log == null ? null : (Stopwatch()..start());
       try {
         final res = await dio.request<dynamic>(
           fullUrl,
@@ -238,6 +269,7 @@ class SpApi {
         );
 
         if ((res.statusCode ?? 200) >= 400) {
+          emit(sw, res: res, ro: res.requestOptions);
           final isTransientStatus = effectiveConfig.statusCodes.contains(
             res.statusCode,
           );
@@ -265,6 +297,7 @@ class SpApi {
             res,
             tenantHeader: tenant?.header,
           );
+          emit(sw, res: res, ro: res.requestOptions, err: envelopeError);
           if (envelopeError.errorCode == 10002 &&
               auth != null &&
               !authRefreshed) {
@@ -277,8 +310,19 @@ class SpApi {
           throw envelopeError;
         }
 
+        emit(sw, res: res, ro: res.requestOptions);
         return res;
       } on DioException catch (dioErr) {
+        if (!logged) {
+          emit(
+            sw,
+            res: dioErr.response,
+            ro: dioErr.requestOptions,
+            failureCode: dioErr.response == null
+                ? _transportCode(dioErr)
+                : null,
+          );
+        }
         if (dioErr.type == DioExceptionType.cancel ||
             (cancelToken != null && cancelToken.isCancelled)) {
           rethrow;
@@ -322,16 +366,9 @@ class SpApi {
           throw SpApiError.fromResponse(res, tenantHeader: tenant?.header);
         }
 
-        final code =
-            dioErr.type == DioExceptionType.connectionTimeout ||
-                dioErr.type == DioExceptionType.receiveTimeout ||
-                dioErr.type == DioExceptionType.sendTimeout
-            ? SpApiErrorCode.timeout
-            : SpApiErrorCode.network;
-
         throw SpApiError(
           status: 0,
-          code: code,
+          code: _transportCode(dioErr),
           message: dioErr.message ?? 'HTTP transport failed',
           cause: dioErr,
           stackTrace: dioErr.stackTrace,
@@ -339,6 +376,13 @@ class SpApi {
       }
     }
   }
+
+  static SpApiErrorCode _transportCode(DioException e) =>
+      e.type == DioExceptionType.connectionTimeout ||
+          e.type == DioExceptionType.receiveTimeout ||
+          e.type == DioExceptionType.sendTimeout
+      ? SpApiErrorCode.timeout
+      : SpApiErrorCode.network;
 
   Duration? _parseRetryAfter(Headers? headers) {
     if (headers == null) return null;

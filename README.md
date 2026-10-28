@@ -240,6 +240,37 @@ final page = await invoices.list(
 // Later, e.g. when the screen closes: cancel.cancel();
 ```
 
+## Request logging
+
+Logging is off by default and the package never prints anything itself: you give `SpApi` a sink and it receives one `SpLogEntry` per HTTP attempt (a 401 refresh retry, a 10002 envelope retry and every `RetryConfig` retry each get their own, with an increasing `attempt`). In Flutter use `debugPrint` as the sink.
+
+```dart
+final api = SpApi(
+  baseUrl: Uri.parse('https://api.example.com/api/v1'),
+  logger: SpLogger(sink: (entry) => debugPrint('$entry')),
+);
+```
+
+The default mode, `SpLogMode.perRequest`, logs only requests that opt in; `SpLogMode.all` logs every request and `SpLogMode.off` logs nothing, even for requests that opt in. An entry holds the method, the URL (sensitive query values redacted), status, duration, request id, attempt and, on failure, `code` (`SpApiErrorCode`) and `errorCode`. Headers and bodies are added only when a request asks for them, and the marker is never sent to the server:
+
+```dart
+final page = await invoices.list(
+  select: 'id,number',
+  options: SpLog.on(bodies: true),
+);
+```
+
+Combine it with other options using `SpLog.merge(options, bodies: true)`, or `options.copyWith(extra: {...?options.extra, ...SpLog.on().extra!})`.
+
+What to know before you ship it:
+
+- Redaction cannot be switched off. Header values for `Authorization`, `Cookie`, `Set-Cookie`, `X-CSRF-Token`, the tenant header and any header whose name contains `auth`, `token`, `key`, `secret`, `cookie`, `session`, `csrf`, `xsrf`, `password` or `credential` become `<redacted>`. In bodies and query strings, keys such as `password`, `secret`, `code`, `otp`, `jwt`, `token`, `api_key`, `access_token`, `refresh_token` and any key ending in `token`, `secret`, `password` or `apikey` (case-insensitive, `-` and `_` ignored, at any depth, inside arrays) become `<redacted>`.
+- Only those keys and patterns are redacted. Plain-text bodies and JSON stringified inside a value are not scanned, and URL paths and fragments are logged verbatim, so do not put secrets in a path. The sink can still receive personal data.
+- Bodies are cut at 2048 UTF-16 code units (`maxBodyLength`). Byte bodies show as `<N bytes>`, `FormData` as `<multipart>` and streams as `<stream>`; `getBytes` content is never logged.
+- The sink runs inline on the request path, so keep it quick. A sink that throws, or returns a failing `Future`, is ignored and never changes the request result.
+
+Tests: [`test/core/api_logging_test.dart`](test/core/api_logging_test.dart), [`test/core/log_redaction_test.dart`](test/core/log_redaction_test.dart).
+
 ## Attachments
 
 `upload` sends one multipart POST (`bytes` or `filePath`, `visibility` defaults to `private`); `link`/`unlink` attach a file to a record; `viewBytes` fetches protected content with your auth headers. Tests: [`test/modules/attachments_upload_test.dart`](test/modules/attachments_upload_test.dart).
