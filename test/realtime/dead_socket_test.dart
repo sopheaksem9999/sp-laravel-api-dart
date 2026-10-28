@@ -26,7 +26,8 @@ void main() {
         tokenProvider: () async => 'mock-jwt-token',
         dio: Dio(),
         activityTimeout: activityTimeout,
-        pongTimeout: const Duration(milliseconds: 50),
+        // Long enough that a live socket's pong is never late under load.
+        pongTimeout: const Duration(milliseconds: 200),
         reconnectDelay: const Duration(milliseconds: 10),
       );
       rt.onDisconnected(() {
@@ -67,6 +68,9 @@ void main() {
       expect(server.connectionCount, 2);
       expect(client.isConnected, isTrue);
       expect(client.socketId, isNot(first));
+      // The new socket answers pings; isHealthy is false only while one is
+      // in flight, so wait for it rather than sample it.
+      await waitFor(() => client.isHealthy);
       expect(client.isHealthy, isTrue);
     });
 
