@@ -83,6 +83,11 @@ class SpApi {
   /// leaves the request path unchanged. See [SpLogger] and [SpLog].
   final SpLogger? logger;
 
+  /// Whether every request sends `X-Debug: 1`, asking the server for
+  /// diagnostics. Defaults to `false` (no header). A per-request `X-Debug`
+  /// header wins. This logs nothing on the client; see [SpDebug] and [SpLog].
+  final bool debug;
+
   /// The underlying [Dio] HTTP client instance.
   final Dio dio;
 
@@ -95,6 +100,7 @@ class SpApi {
     this.retry,
     this.treatSuccessFalseAsError = true,
     this.logger,
+    this.debug = false,
     Dio? dio,
   }) : dio = dio ?? Dio();
 
@@ -241,6 +247,8 @@ class SpApi {
         final authHeaders = await auth!.headers();
         reqHeaders.addAll(authHeaders);
       }
+
+      if (debug) reqHeaders['X-Debug'] = '1';
 
       if (options?.headers != null) {
         reqHeaders.addAll(options!.headers!);

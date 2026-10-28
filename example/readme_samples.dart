@@ -240,3 +240,17 @@ Future<void> realtimeSetup() async {
   // When done:
   unsubscribe();
 }
+
+Future<void> serverDebugSample(TableGateway<Invoice> invoices) async {
+  // Every request:
+  final debugApi = SpApi(
+    baseUrl: Uri.parse('https://api.example.com/api/v1'),
+    debug: true,
+  );
+
+  // One request only, optionally combined with logging:
+  final page = await invoices.list(
+    select: 'id,number',
+    options: SpDebug.merge(SpLog.on(headers: true)),
+  );
+}

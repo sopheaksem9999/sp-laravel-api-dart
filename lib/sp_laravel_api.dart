@@ -3,6 +3,7 @@ library;
 
 export 'src/api_auth.dart';
 export 'src/api_core.dart';
+export 'src/debug.dart';
 export 'src/errors.dart';
 export 'src/logging.dart' show SpLogMode, SpLogger, SpLogEntry, SpLog;
 export 'src/pagination.dart';

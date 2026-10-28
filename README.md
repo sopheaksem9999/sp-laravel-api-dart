@@ -240,6 +240,26 @@ final page = await invoices.list(
 // Later, e.g. when the screen closes: cancel.cancel();
 ```
 
+## Server debug diagnostics
+
+The `debug` option asks the SERVER for diagnostics: it sends `X-Debug: 1`, and the backend then adds extra fields to response bodies (lazy-loading diagnostics) and debug details to errors. It logs nothing on the client; for client-side logging see `SpLog` above. Keep it off in production builds. The header contract is described in the backend package docs, page `api-crud-operations` (docs/backend is not part of this repository).
+
+```dart
+// Every request:
+final debugApi = SpApi(
+  baseUrl: Uri.parse('https://api.example.com/api/v1'),
+  debug: true,
+);
+
+// One request only, optionally combined with logging:
+final page = await invoices.list(
+  select: 'id,number',
+  options: SpDebug.merge(SpLog.on(headers: true)),
+);
+```
+
+The default sends no `X-Debug` header. A per-request `X-Debug` header (even `X-Debug: 0`) wins over `debug: true`. `SpDebug.on()` works on every `TableGateway` method and on `rpc`; `SpDebug.merge(options)` keeps your other options.
+
 ## Request logging
 
 Logging is off by default and the package never prints anything itself: you give `SpApi` a sink and it receives one `SpLogEntry` per HTTP attempt (a 401 refresh retry, a 10002 envelope retry and every `RetryConfig` retry each get their own, with an increasing `attempt`). In Flutter use `debugPrint` as the sink.
