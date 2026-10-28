@@ -1,6 +1,12 @@
 import 'dart:async';
 
 /// Abstract transport contract for WebSocket and realtime connections.
+///
+/// `SpRealtime.subscribe` waits for the server's confirmation, so custom
+/// implementations and test fakes must deliver
+/// `pusher_internal:subscription_succeeded` on [incoming] for each
+/// `pusher:subscribe` sent through [send] (a real Pusher server does), or
+/// `subscribe` times out.
 abstract interface class RealtimeTransport {
   /// Opens a connection to [uri].
   Future<void> connect(Uri uri);

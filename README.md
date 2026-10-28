@@ -283,6 +283,10 @@ unsubscribe();
 
 `subscribe` completes only after the server confirms the channel (`pusher_internal:subscription_succeeded`), so reading current state right after it returns cannot miss an event. It throws `SpApiError` with code `timeout` when no confirmation arrives within `subscribeTimeout` (default 10 seconds), or the channel authorization error; in both cases no subscription is left registered, so a later reconnect does not rejoin it. A second `subscribe` to a confirmed channel returns at once with no new frame, and concurrent subscribers on a pending channel share one confirmation.
 
+A custom `RealtimeTransport` implementation or test fake must deliver `pusher_internal:subscription_succeeded` for each `pusher:subscribe` it receives, as a real server does, or `subscribe` times out.
+
+Known limitation: the Pusher protocol has no correlation id, so a very late confirmation (more than `subscribeTimeout`) of an abandoned subscribe frame can complete a new `subscribe` to the same channel early.
+
 After a reconnect, a channel whose re-subscribe fails is retried with exponential backoff (`subscribeBackoff`, default 300 ms, doubling, capped at 5 s) up to `subscribeAttempts` (default 3) times. The final failure is reported once through `onSubscribeFailed(channel, error)` and the client stops retrying that channel until the next reconnect. Tests: [`test/realtime/subscribe_confirmation_test.dart`](test/realtime/subscribe_confirmation_test.dart).
 
 Pass `subscribeTimeout`, `subscribeAttempts`, `subscribeBackoff` and `onSubscribeFailed` to the `SpRealtime` constructor to tune this.
