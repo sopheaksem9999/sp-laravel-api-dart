@@ -65,7 +65,13 @@ class SpRealtime {
   final void Function(String channel, Object error)? onSubscribeFailed;
 
   String? _socketId;
-  Future<void>? _connectingFuture;
+
+  /// The connect attempt in flight (before `connection_established`), or null.
+  Completer<void>? _connectAttempt;
+
+  /// Consecutive failed connect attempts; reset once a connection is
+  /// established. Drives the reconnect backoff.
+  int _connectFailures = 0;
   StreamSubscription<String>? _incomingSub;
   StreamSubscription<void>? _doneSub;
 
@@ -106,7 +112,7 @@ class SpRealtime {
 
     if (!isConnected || wasStale || !isHealthy) {
       if (!_isOffline) {
-        connect();
+        _reconnectNow();
       }
     }
   }
@@ -119,7 +125,7 @@ class SpRealtime {
     _isOffline = !online;
     if (online) {
       if (!isConnected) {
-        connect();
+        _reconnectNow();
       }
     }
   }
@@ -158,24 +164,71 @@ class SpRealtime {
     }
     _manualDisconnect = false;
     _reconnectTimer?.cancel();
+    _reconnectTimer = null;
     if (isConnected) {
       return Future.value();
     }
-    if (_connectingFuture != null) {
-      return _connectingFuture!;
+    final inFlight = _connectAttempt;
+    if (inFlight != null) {
+      return inFlight.future;
     }
 
-    final completer = Completer<void>();
-    _connectingFuture = completer.future;
+    final attempt = Completer<void>();
+    _connectAttempt = attempt;
 
-    _setupListeners(completer);
-    _transport.connect(driver.toUri()).catchError((Object err) {
-      if (!completer.isCompleted) {
-        completer.completeError(err);
+    _setupListeners(attempt);
+    // Future.sync: a transport that throws synchronously is a failed attempt
+    // too, not a stuck one.
+    Future.sync(() => _transport.connect(driver.toUri())).catchError(
+      (Object error, StackTrace stack) => _connectFailed(attempt, error, stack),
+    );
+
+    return attempt.future;
+  }
+
+  /// Ends [attempt] with [error] and schedules a retry. Ignored when the
+  /// attempt was already ended (disconnect, dispose or an early close).
+  void _connectFailed(
+    Completer<void> attempt,
+    Object error, [
+    StackTrace? stack,
+  ]) {
+    if (!identical(_connectAttempt, attempt)) return;
+    _connectAttempt = null;
+    _connectFailures++;
+    attempt.completeError(error, stack);
+    _scheduleReconnect();
+  }
+
+  /// Connects from an internal trigger (timer, resume, online event). The
+  /// error is handled here: a failed attempt schedules its own retry.
+  void _reconnectNow() {
+    connect().ignore();
+  }
+
+  /// Schedules a reconnect after [reconnectDelay], doubled per consecutive
+  /// failed attempt up to 5 s (or [reconnectDelay] when it is longer),
+  /// unless the client is offline, manually disconnected or disposed.
+  void _scheduleReconnect() {
+    _reconnectTimer?.cancel();
+    _reconnectTimer = null;
+    if (_isDisposed || _isOffline || _manualDisconnect) return;
+    _reconnectTimer = Timer(_nextReconnectDelay(), () {
+      _reconnectTimer = null;
+      if (!_isDisposed && !_isOffline && !_manualDisconnect && !isConnected) {
+        _reconnectNow();
       }
     });
+  }
 
-    return _connectingFuture!;
+  Duration _nextReconnectDelay() {
+    const ceiling = Duration(seconds: 5);
+    final cap = reconnectDelay > ceiling ? reconnectDelay : ceiling;
+    var delay = reconnectDelay;
+    for (var i = 0; i < _connectFailures && delay < cap; i++) {
+      delay *= 2;
+    }
+    return delay > cap ? cap : delay;
   }
 
   void _setupListeners(Completer<void> connectCompleter) {
@@ -197,6 +250,9 @@ class SpRealtime {
 
     switch (frame.event) {
       case 'pusher:connection_established':
+        // A handshake for an attempt already ended by disconnect(), dispose()
+        // or an early close must not bring the connection back.
+        if (!identical(_connectAttempt, connectCompleter)) return;
         final data = frame.data;
         if (data is Map<String, dynamic>) {
           _socketId = data['socket_id']?.toString();
@@ -204,12 +260,11 @@ class SpRealtime {
           _socketId = data['socket_id']?.toString();
         }
 
+        _connectAttempt = null;
+        _connectFailures = 0;
         _connectionEpoch++;
         _resetActivityTimer();
-        if (!connectCompleter.isCompleted) {
-          connectCompleter.complete();
-        }
-        _connectingFuture = null;
+        connectCompleter.complete();
 
         // Rejoin existing channel intents if reconnecting
         if (_intents.isNotEmpty) {
@@ -287,26 +342,36 @@ class SpRealtime {
   }
 
   void _handleDisconnect() {
+    final wasConnected = _socketId != null;
+    final attempt = _connectAttempt;
     _socketId = null;
+    _connectAttempt = null;
     _connectionEpoch++;
     _confirmedChannels.clear();
     _failedRejoins.clear();
-    _connectingFuture = null;
     _activityTimer?.cancel();
     _pongTimer?.cancel();
 
-    for (final callback in List.of(_disconnectCallbacks)) {
-      callback();
+    if (attempt != null) {
+      // Closed before `connection_established`: the attempt failed.
+      _connectFailures++;
+      attempt.completeError(
+        const SpApiError(
+          status: 0,
+          code: SpApiErrorCode.network,
+          message: 'Realtime connection closed before it was established',
+        ),
+      );
     }
 
-    if (!_isDisposed && !_isOffline && !_manualDisconnect) {
-      _reconnectTimer?.cancel();
-      _reconnectTimer = Timer(reconnectDelay, () {
-        if (!_isDisposed && !_isOffline && !isConnected) {
-          connect().catchError((_) {});
-        }
-      });
+    // Only an established connection can be lost.
+    if (wasConnected) {
+      for (final callback in List.of(_disconnectCallbacks)) {
+        callback();
+      }
     }
+
+    _scheduleReconnect();
   }
 
   Completer<void> _pendingFor(String channel) {
@@ -601,6 +666,8 @@ class SpRealtime {
   Future<void> disconnect() async {
     _manualDisconnect = true;
     _reconnectTimer?.cancel();
+    _reconnectTimer = null;
+    _connectFailures = 0;
     await _transport.close();
     _handleDisconnect();
   }
@@ -612,6 +679,15 @@ class SpRealtime {
     _reconnectTimer?.cancel();
     _activityTimer?.cancel();
     _pongTimer?.cancel();
+    final attempt = _connectAttempt;
+    _connectAttempt = null;
+    attempt?.completeError(
+      const SpApiError(
+        status: 0,
+        code: SpApiErrorCode.network,
+        message: 'Realtime client disposed',
+      ),
+    );
     await _incomingSub?.cancel();
     await _doneSub?.cancel();
     await _transport.close();
