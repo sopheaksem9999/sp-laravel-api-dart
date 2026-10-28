@@ -582,6 +582,46 @@ void main() {
       expect(base.extra, {'mine': 1});
     });
 
+    test(
+      'redacts select embed filters, anyOf keys and filter groups',
+      () async {
+        final h = _Harness([
+          _ok(<String, dynamic>{
+            'data': <Object>[],
+            'meta': <String, dynamic>{},
+          }),
+        ]);
+        final t = h
+            .api(mode: SpLogMode.all)
+            .table<Map<String, dynamic>>('users', fromJson: (j) => j);
+        await t.list(select: 'id,sessions(id,token=eq.SECRET_EMBED)');
+        await t.list(
+          select: 'id',
+          where: [
+            Filter.anyOf([
+              'api_token',
+              'email',
+            ], Filter.eq('x', 'SECRET_ANYOF')),
+          ],
+        );
+        await t.list(
+          select: 'id',
+          or: [
+            Filter.eq('email', 'a@example.com'),
+            Filter.eq('api_token', 'SECRET_GROUP'),
+          ],
+        );
+        await t.list(select: 'id,sessions(id,status=eq.open)');
+        final all = h.entries.map((e) => e.url).join('\n');
+        for (final s in ['SECRET_EMBED', 'SECRET_ANYOF', 'SECRET_GROUP']) {
+          expect(all, isNot(contains(s)));
+        }
+        expect(h.entries[0].url, contains('select=<redacted>'));
+        expect(h.entries[1].url, contains('=<redacted>'));
+        expect(h.entries[3].url, contains('status%3Deq.open'));
+      },
+    );
+
     test('works through TableGateway options', () async {
       final h = _Harness([
         _ok(<String, dynamic>{'data': <Object>[], 'meta': <String, dynamic>{}}),

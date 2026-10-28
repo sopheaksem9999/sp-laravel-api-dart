@@ -221,6 +221,11 @@ final _groupKey = RegExp(r'^(not\.)?(and|or)$');
 /// start, a `(` or a `,`.
 final _groupColumn = RegExp(r'(?:^|[(,])\s*([^(),.]+)\.');
 
+/// The column of an embed filter inside `select` (`rel(cols,col=op.value)`):
+/// the text before `=` after the start, a `(` or a `,`.
+final _embedColumn = RegExp(r'(?:^|[(,])\s*([^(),.=]+)=');
+final _keyParts = RegExp(r'\s*[\[\],]\s*');
+
 /// Whether a body or query key is sensitive. The key is lower-cased with `-`
 /// and `_` removed; it is sensitive when it equals a listed key (password,
 /// secret, code, otp, jwt, token, apikey, accesstoken, refreshtoken, pin,
@@ -281,24 +286,34 @@ String _decode(String s) {
   }
 }
 
+/// A query key is sensitive when it, any bracket segment (`user[password]`)
+/// or any comma-separated part (`AnyOfColumnsFilter`: `api_token,email`) is.
 bool _isSensitiveQueryKey(String rawKey) {
   final key = _decode(rawKey);
   return isSensitiveKey(key) ||
-      key
-          .split(RegExp(r'[\[\]]'))
-          .any((s) => s.isNotEmpty && isSensitiveKey(s));
+      key.split(_keyParts).any((s) => s.isNotEmpty && isSensitiveKey(s));
 }
 
-/// A filter group (`or`, `and`, `not.or`, `not.and`) whose value names a
-/// sensitive column, at any nesting depth.
-bool _isSensitiveGroup(String rawKey, String rawValue) =>
-    _groupKey.hasMatch(_decode(rawKey)) &&
-    _groupColumn
-        .allMatches(_decode(rawValue))
-        .any((m) => isSensitiveKey(m[1]!));
+bool _namesSensitiveColumn(String value, RegExp re) =>
+    re.allMatches(value).any((m) => isSensitiveKey(m[1]!));
+
+/// A value that embeds a condition on a sensitive column, at any nesting
+/// depth: a filter group (`or`, `and`, `not.or`, `not.and`: `col.op.value`)
+/// or a `select` with an embed filter (`rel(cols,col=op.value)`).
+bool _isSensitiveEmbedded(String rawKey, String rawValue) {
+  final key = _decode(rawKey);
+  if (_groupKey.hasMatch(key)) {
+    return _namesSensitiveColumn(_decode(rawValue), _groupColumn);
+  }
+  if (key == 'select') {
+    return _namesSensitiveColumn(_decode(rawValue), _embedColumn);
+  }
+  return false;
+}
 
 /// Applied to a query string and to a fragment: `key=value` parts with a
-/// sensitive key, or a sensitive filter group, lose their value.
+/// sensitive key, or a value embedding a condition on a sensitive column,
+/// lose their value.
 String _redactQuery(String qs) => qs
     .split('&')
     .map((part) {
@@ -306,7 +321,7 @@ String _redactQuery(String qs) => qs
       if (i <= 0) return part;
       final k = part.substring(0, i);
       return _isSensitiveQueryKey(k) ||
-              _isSensitiveGroup(k, part.substring(i + 1))
+              _isSensitiveEmbedded(k, part.substring(i + 1))
           ? '$k=$_redacted'
           : part;
     })
