@@ -17,9 +17,12 @@ abstract interface class RealtimeTransport {
   /// Stream of incoming text frames from the server.
   Stream<String> get incoming;
 
-  /// Stream signaling that the connection has closed.
+  /// Stream signaling that the server or the network closed the connection.
   Stream<void> get onDone;
 
   /// Closes the underlying connection.
+  ///
+  /// Need not emit [onDone] ([WebSocketTransport] does not): `SpRealtime`
+  /// handles the loss of a connection it closes itself.
   Future<void> close([int? code, String? reason]);
 }

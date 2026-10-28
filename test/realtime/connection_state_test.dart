@@ -280,4 +280,124 @@ void main() {
       },
     );
   });
+
+  group('dead socket', () {
+    test('a pong timeout drops the connection once and reconnects', () async {
+      final t = ScriptedTransport()..answerPings = false;
+      final rt = _client(
+        t,
+        reconnectDelay: const Duration(milliseconds: 5),
+        activityTimeout: const Duration(milliseconds: 20),
+        pongTimeout: const Duration(milliseconds: 20),
+      );
+      var disconnects = 0;
+      rt.onDisconnected(() {
+        disconnects++;
+        t.answerPings = true; // the next socket is alive
+      });
+      await rt.connect();
+
+      await _tick(200);
+      expect(disconnects, 1);
+      expect(t.closeCount, 1);
+      expect(t.connectCount, 2);
+      expect(rt.isConnected, isTrue);
+      await rt.dispose();
+    });
+
+    test('onDisconnected fires once per connection', () async {
+      final t = ScriptedTransport();
+      final rt = _client(t);
+      var disconnects = 0;
+      rt.onDisconnected(() => disconnects++);
+      await rt.connect();
+
+      t.drop(); // the server closes the socket
+      await _tick();
+      await rt.disconnect();
+      await rt.disconnect();
+      expect(disconnects, 1);
+      await rt.dispose();
+    });
+
+    test('a resume while a ping is unanswered reconnects at once', () async {
+      final t = ScriptedTransport()..answerPings = false;
+      final rt = _client(
+        t,
+        activityTimeout: const Duration(milliseconds: 20),
+        pongTimeout: const Duration(minutes: 10),
+      );
+      var disconnects = 0;
+      rt.onDisconnected(() => disconnects++);
+      await rt.connect();
+      await _tick(60);
+      expect(rt.isHealthy, isFalse);
+
+      t.answerPings = true;
+      rt.onAppResumed();
+      await _tick(5);
+      expect(disconnects, 1);
+      expect(t.connectCount, 2);
+      expect(rt.isConnected, isTrue);
+      await rt.dispose();
+    });
+
+    test('a stale resume pings at once and replaces a dead socket', () async {
+      final t = ScriptedTransport()..answerPings = false;
+      final rt = _client(
+        t,
+        reconnectDelay: const Duration(milliseconds: 5),
+        pongTimeout: const Duration(milliseconds: 20),
+      );
+      var disconnects = 0;
+      rt.onDisconnected(() {
+        disconnects++;
+        t.answerPings = true;
+      });
+      await rt.connect();
+
+      rt.onAppPaused();
+      rt.onAppResumed(forceStale: true);
+      expect(t.framesSent('pusher:ping'), 1);
+      await _tick(150);
+      expect(disconnects, 1);
+      expect(t.connectCount, 2);
+      expect(rt.isConnected, isTrue);
+      await rt.dispose();
+    });
+
+    test('a stale resume keeps a live socket', () async {
+      final t = ScriptedTransport();
+      final rt = _client(t, pongTimeout: const Duration(milliseconds: 20));
+      await rt.connect();
+
+      rt.onAppPaused();
+      rt.onAppResumed(forceStale: true);
+      expect(t.framesSent('pusher:ping'), 1);
+      await _tick(100);
+      expect(t.connectCount, 1);
+      expect(rt.isHealthy, isTrue);
+      await rt.dispose();
+    });
+
+    test('a connection made after a drop with a ping in flight is healthy', () async {
+      final t = ScriptedTransport()..answerPings = false;
+      final rt = _client(
+        t,
+        reconnectDelay: const Duration(milliseconds: 5),
+        activityTimeout: const Duration(milliseconds: 200),
+        pongTimeout: const Duration(minutes: 10),
+      );
+      await rt.connect();
+      await _tick(260); // ping sent, no pong
+      expect(rt.isHealthy, isFalse);
+
+      t.answerPings = true;
+      t.drop();
+      await _tick(50);
+      expect(t.connectCount, 2);
+      expect(rt.isHealthy, isTrue);
+      await rt.dispose();
+    });
+  });
 }

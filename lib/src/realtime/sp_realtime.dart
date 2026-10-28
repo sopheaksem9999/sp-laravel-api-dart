@@ -109,9 +109,12 @@ class SpRealtime {
 
   /// Signals that the application or page has resumed to the foreground.
   ///
-  /// Runs a health check and triggers immediate reconnect if stale or
-  /// disconnected. Does nothing for a client that is not in use: one that
-  /// was never connected, or was stopped with [disconnect] or [dispose].
+  /// Runs a health check: reconnects at once when disconnected or when a
+  /// ping is still unanswered, and sends a ping at once after a long
+  /// ([forceStale]) pause, so a socket that died in the background is
+  /// replaced after [pongTimeout]. Does nothing for a client that is not in
+  /// use: one that was never connected, or was stopped with [disconnect] or
+  /// [dispose].
   void onAppResumed({bool? forceStale}) {
     final now = DateTime.now();
     final wasStale =
@@ -121,8 +124,13 @@ class SpRealtime {
     _pausedAt = null;
 
     if (!_mayAutoConnect) return;
-    if (!isConnected || wasStale || !isHealthy) {
+    if (!isConnected) {
       _reconnectNow();
+    } else if (!isHealthy) {
+      _dropConnection(4200, 'Unanswered ping on resume');
+      _reconnectNow();
+    } else if (wasStale) {
+      _sendPing();
     }
   }
 
@@ -350,16 +358,23 @@ class SpRealtime {
     }
   }
 
+  /// Handles the loss of the current connection (or connect attempt). Runs
+  /// once per connection: onDone, a pong timeout, a forced reconnect and
+  /// [disconnect] may all report the same loss.
   void _handleDisconnect() {
     final wasConnected = _socketId != null;
     final attempt = _connectAttempt;
+    if (!wasConnected && attempt == null) return;
     _socketId = null;
     _connectAttempt = null;
     _connectionEpoch++;
     _confirmedChannels.clear();
     _failedRejoins.clear();
     _activityTimer?.cancel();
+    _activityTimer = null;
+    // Null, not just cancelled: isHealthy of the next connection reads it.
     _pongTimer?.cancel();
+    _pongTimer = null;
 
     if (attempt != null) {
       // Closed before `connection_established`: the attempt failed.
@@ -655,10 +670,22 @@ class SpRealtime {
     if (!isConnected) return;
     _transport.send(PusherFrame.ping().toJsonString());
     _pongTimer?.cancel();
+    final epoch = _connectionEpoch;
     _pongTimer = Timer(pongTimeout, () {
-      // Socket died silently: missing pong
-      _transport.close(4200, 'Ping timeout');
+      _pongTimer = null;
+      if (epoch != _connectionEpoch) return;
+      // Socket died silently: missing pong.
+      _dropConnection(4200, 'Ping timeout');
     });
+  }
+
+  /// Closes the transport and handles the loss at once. An app-initiated
+  /// close emits no onDone (WebSocketTransport cancels its subscription
+  /// first), so waiting for onDone would leave a dead socket in place; the
+  /// close is not awaited because a dead peer may never finish it.
+  void _dropConnection(int code, String reason) {
+    Future.sync(() => _transport.close(code, reason)).ignore();
+    _handleDisconnect();
   }
 
   /// Registers a callback notified when the connection drops.

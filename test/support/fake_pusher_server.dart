@@ -20,6 +20,13 @@ class FakePusherServer {
   /// signature. Defaults to null (authorize).
   int? authFailureStatus;
 
+  /// When false, `pusher:ping` frames get no `pusher:pong`, like a socket
+  /// that died silently. Defaults to true.
+  bool answerPings = true;
+
+  /// Number of WebSocket connections accepted.
+  int get connectionCount => _counter;
+
   /// Channels of every `pusher:subscribe` frame received, in order.
   final List<String> subscribeRequests = [];
 
@@ -130,7 +137,7 @@ class FakePusherServer {
               unsubscribeRequests.add(channel);
               _socketChannels[socketId]?.remove(channel);
             }
-          } else if (event == 'pusher:ping') {
+          } else if (event == 'pusher:ping' && answerPings) {
             socket.add(jsonEncode({'event': 'pusher:pong', 'data': '{}'}));
           }
         } catch (_) {}

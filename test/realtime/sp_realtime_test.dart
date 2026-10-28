@@ -57,8 +57,8 @@ class FakeRealtimeTransport implements RealtimeTransport {
 
   @override
   Future<void> close([int? code, String? reason]) async {
+    // Like WebSocketTransport: an app-initiated close emits no onDone.
     isConnected = false;
-    _doneController.add(null);
   }
 
   void simulateServerMessage(String raw) {
