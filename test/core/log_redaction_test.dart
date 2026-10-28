@@ -20,9 +20,9 @@ void main() {
 
   test('the shared fixture has not been cut down', () {
     expect(headers.length, greaterThanOrEqualTo(46));
-    expect(bodies.length, greaterThanOrEqualTo(106));
-    expect(perf.length, greaterThanOrEqualTo(17));
-    expect(urls.length, greaterThanOrEqualTo(69));
+    expect(bodies.length, greaterThanOrEqualTo(111));
+    expect(perf.length, greaterThanOrEqualTo(22));
+    expect(urls.length, greaterThanOrEqualTo(81));
   });
 
   group('sensitive body and query keys are redacted at any depth', () {
@@ -85,6 +85,43 @@ void main() {
     expect(differ, isEmpty);
   });
 
+  group('only plain data is walked', () {
+    test('a custom object body is logged as <object>', () {
+      expect(redactBody(_Credentials()), '<object>');
+      expect(redactBody({'user': _Credentials(), 'keep': 1}), {
+        'user': '<object>',
+        'keep': 1,
+      });
+      expect(redactBody([DateTime(2026), Uri.parse('https://a.example.com')]), [
+        '<object>',
+        '<object>',
+      ]);
+    });
+
+    test('a Set/Map body is logged as <object>', () {
+      expect(redactBody({'SECRET_SET'}), '<object>');
+      expect(redactBody([1, 2].map((x) => x)), '<object>');
+      expect(
+        redactBody({
+          's': <int>{1},
+          'm': <String, Object?>{'token': 't'},
+        }),
+        {
+          's': '<object>',
+          'm': {'token': '<redacted>'},
+        },
+      );
+    });
+
+    test('a model with toJson/toJSON never reaches the sink', () {
+      expect(redactBody(_Model('SECRET_JSON')), '<object>');
+      expect(
+        jsonEncode(redactBody({'inner': _Model('SECRET_JSON')})),
+        isNot(contains('SECRET_JSON')),
+      );
+    });
+  });
+
   test('redaction does not mutate its input', () {
     final body = {
       'a': {'token': 't1'},
@@ -119,4 +156,19 @@ void main() {
     expect(out, '${'a' * 2047}…[truncated]');
     expect(out.codeUnits.where((c) => c >= 0xd800 && c <= 0xdfff), isEmpty);
   });
+}
+
+class _Credentials {
+  final String password = 'SECRET_MODEL';
+  final String note = 'n';
+  @override
+  String toString() => 'Credentials($password)';
+}
+
+class _Model {
+  final String secret;
+  _Model(this.secret);
+  Map<String, Object?> toJson() => {'visible': secret};
+  @override
+  String toString() => 'Model($secret)';
 }

@@ -655,6 +655,30 @@ void main() {
       expect(h.entries[3].url, contains('customer.display_name.ilike.acme'));
     });
 
+    test('a model request body never reaches the sink', () async {
+      final h = _Harness([
+        _ok({
+          'success': true,
+          'data': {'token': 'SECRET_RES'},
+        }),
+      ]);
+      await h
+          .api(mode: SpLogMode.all)
+          .request(
+            'POST',
+            'invoices',
+            data: _Model('SECRET_MODEL'),
+            options: SpLog.on(bodies: true),
+          );
+      final e = h.entries.single;
+      expect(e.requestBody, '<object>');
+      expect(e.responseBody, {
+        'success': true,
+        'data': {'token': '<redacted>'},
+      });
+      expect('${e.requestBody}${e.responseBody}', isNot(contains('SECRET')));
+    });
+
     test('works through TableGateway options', () async {
       final h = _Harness([
         _ok(<String, dynamic>{'data': <Object>[], 'meta': <String, dynamic>{}}),
@@ -744,4 +768,12 @@ void main() {
       expect(out.codeUnits.last, 0xde00);
     });
   });
+}
+
+class _Model {
+  final String secret;
+  _Model(this.secret);
+  Map<String, Object?> toJson() => {'visible': secret};
+  @override
+  String toString() => 'Model($secret)';
 }

@@ -14,6 +14,15 @@ const int _maxIdRunes = 128;
 /// `<unavailable>` as a whole.
 const int _maxDepth = 100;
 const String _unavailable = '<unavailable>';
+
+/// What a body value that is not plain data (class instance, model with
+/// `toJson`, `Set`, other `Iterable`, `Uri`, `DateTime`) becomes.
+const String _object = '<object>';
+
+/// A query or fragment value holding a URL is redacted as a URL, at most this
+/// many levels deep.
+const int _maxUrlDepth = 2;
+final _nestedUrl = RegExp(r'^https?://', caseSensitive: false);
 const String _extraKey = 'sp.log';
 
 /// Which requests a [SpLogger] reports.
@@ -299,12 +308,85 @@ Map<String, String> redactHeaders(
   return out;
 }
 
+int _hexValue(int c) {
+  if (c >= 0x30 && c <= 0x39) return c - 0x30;
+  final l = c | 0x20;
+  return l >= 0x61 && l <= 0x66 ? l - 0x57 : -1;
+}
+
+/// The byte of a `%XX` escape at [i], or -1.
+int _escapedByte(String s, int i) {
+  if (i + 2 >= s.length || s.codeUnitAt(i) != 0x25) return -1;
+  final h = _hexValue(s.codeUnitAt(i + 1));
+  final l = _hexValue(s.codeUnitAt(i + 2));
+  return h < 0 || l < 0 ? -1 : h * 16 + l;
+}
+
+/// Tolerant percent-decoding, identical in JS and Dart: every `%XX` run
+/// forming valid UTF-8 is decoded (as `decodeURIComponent` does); an invalid
+/// or truncated sequence and raw non-ASCII text are kept as they are, and the
+/// rest of the text is still decoded. Linear: each escape is looked at most
+/// four times. (`Uri.decodeComponent` throws on raw non-ASCII, which made the
+/// whole text fall back to raw.)
 String _decode(String s) {
-  try {
-    return Uri.decodeComponent(s);
-  } catch (_) {
-    return s;
+  if (!s.contains('%')) return s;
+  final out = StringBuffer();
+  var i = 0;
+  while (i < s.length) {
+    final b = _escapedByte(s, i);
+    if (b < 0) {
+      final next = s.indexOf('%', i + 1);
+      final end = next < 0 ? s.length : next;
+      out.write(s.substring(i, end));
+      i = end;
+      continue;
+    }
+    if (b < 0x80) {
+      out.writeCharCode(b);
+      i += 3;
+      continue;
+    }
+    // UTF-8 lead byte: sequence length and the allowed range of the second
+    // byte (no overlongs, no surrogates).
+    var len = 0;
+    var lo = 0x80;
+    var hi = 0xbf;
+    if (b >= 0xc2 && b <= 0xdf) {
+      len = 2;
+    } else if (b >= 0xe0 && b <= 0xef) {
+      len = 3;
+      if (b == 0xe0) {
+        lo = 0xa0;
+      } else if (b == 0xed) {
+        hi = 0x9f;
+      }
+    } else if (b >= 0xf0 && b <= 0xf4) {
+      len = 4;
+      if (b == 0xf0) {
+        lo = 0x90;
+      } else if (b == 0xf4) {
+        hi = 0x8f;
+      }
+    }
+    var cp = len == 2 ? b & 0x1f : (len == 3 ? b & 0x0f : b & 0x07);
+    var ok = len > 0;
+    for (var k = 1; ok && k < len; k++) {
+      final c = _escapedByte(s, i + 3 * k);
+      if (c < (k == 1 ? lo : 0x80) || c > (k == 1 ? hi : 0xbf)) {
+        ok = false;
+      } else {
+        cp = (cp << 6) | (c & 0x3f);
+      }
+    }
+    if (ok) {
+      out.writeCharCode(cp);
+      i += 3 * len;
+    } else {
+      out.write(s.substring(i, i + 3));
+      i += 3;
+    }
   }
+  return out.toString();
 }
 
 /// The ECMAScript `\s` class (also Dart's) as code units: TAB to CR, space,
@@ -382,24 +464,38 @@ bool _isSensitiveEmbedded(String rawKey, String rawValue) {
 /// Applied to a query string and to a fragment: `key=value` parts with a
 /// sensitive key, or a value embedding a condition on a sensitive column,
 /// lose their value.
-String _redactQuery(String qs) => qs
+String _redactQuery(String qs, int depth) => qs
     .split('&')
     .map((part) {
       final i = part.indexOf('=');
       if (i <= 0) return part;
       final k = part.substring(0, i);
-      return _isSensitiveQueryKey(k) ||
-              _isSensitiveEmbedded(k, part.substring(i + 1))
-          ? '$k=$_redacted'
-          : part;
+      final v = part.substring(i + 1);
+      if (_isSensitiveQueryKey(k) || _isSensitiveEmbedded(k, v)) {
+        return '$k=$_redacted';
+      }
+      if (depth < _maxUrlDepth) {
+        // A value holding a URL (a redirect target) is redacted as a URL;
+        // kept as it was when nothing changes.
+        final url = _decode(v);
+        if (_nestedUrl.hasMatch(url)) {
+          final r = _redactUrlAt(url, depth + 1);
+          if (r != url) return '$k=$r';
+        }
+      }
+      return part;
     })
     .join('&');
 
-/// Redacts sensitive query and fragment values and credentials in the
-/// authority; the path is kept verbatim.
-String redactUrl(String url) {
+/// Redacts sensitive query and fragment values (nested URLs too) and
+/// credentials in the authority; the path is kept verbatim.
+String redactUrl(String url) => _redactUrlAt(url, 0);
+
+String _redactUrlAt(String url, int depth) {
   final hash = url.indexOf('#');
-  final frag = hash < 0 ? '' : '#${_redactQuery(url.substring(hash + 1))}';
+  final frag = hash < 0
+      ? ''
+      : '#${_redactQuery(url.substring(hash + 1), depth)}';
   final rest = hash < 0 ? url : url.substring(0, hash);
   final q = rest.indexOf('?');
   final head = (q < 0 ? rest : rest.substring(0, q)).replaceFirstMapped(
@@ -408,7 +504,7 @@ String redactUrl(String url) {
   );
   return q < 0
       ? '$head$frag'
-      : '$head?${_redactQuery(rest.substring(q + 1))}$frag';
+      : '$head?${_redactQuery(rest.substring(q + 1), depth)}$frag';
 }
 
 String _truncate(String s, int max) {
@@ -425,7 +521,12 @@ class _TooDeep {
   const _TooDeep();
 }
 
+/// Only plain data is walked: maps, lists, strings, numbers, booleans and
+/// null. Any other object becomes `<object>`, never itself (its `toJson` or
+/// `toString` could show a secret).
 Object? _walk(Object? v, int depth) {
+  if (v == null || v is String || v is num || v is bool) return v;
+  if (v is TypedData) return _object;
   if (v is List) {
     if (depth >= _maxDepth) throw const _TooDeep();
     return [for (final x in v) _walk(x, depth + 1)];
@@ -439,25 +540,27 @@ Object? _walk(Object? v, int depth) {
             : _walk(e.value, depth + 1),
     };
   }
-  return v;
+  return _object;
 }
 
 String _redactString(String s) {
-  final t = s.trimLeft();
+  // JSON parsers reject a leading BOM or NBSP, so the text is stripped of
+  // `\s` characters (U+FEFF, U+00A0 included).
+  final t = _strip(s);
   if (t.startsWith('{') || t.startsWith('[')) {
     // Only a parse failure means "not JSON"; a body too deep to walk must not
     // fall through and be echoed.
     Object? parsed;
     var isJson = true;
     try {
-      parsed = jsonDecode(s);
+      parsed = jsonDecode(t);
     } on FormatException {
       isJson = false;
     }
     if (isJson) return jsonEncode(_walk(parsed, 0));
   }
   return RegExp(r'^[^\s=&]+=[^\s&]*(&[^\s=&]+=[^\s&]*)*$').hasMatch(s)
-      ? _redactQuery(s)
+      ? _redactQuery(s, 0)
       : s;
 }
 
