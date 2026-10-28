@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:math' as math;
+import 'dart:typed_data';
 import 'package:dio/dio.dart';
 import 'api_auth.dart';
 import 'errors.dart';
@@ -135,16 +136,19 @@ class SpApi {
   }
 
   /// Fetches raw bytes (e.g. for protected file downloads).
-  Future<List<int>> getBytes(String path) async {
+  ///
+  /// Returns the response buffer as is when it is already a [Uint8List].
+  Future<Uint8List> getBytes(String path) async {
     final res = await request(
       'GET',
       path,
       options: Options(responseType: ResponseType.bytes),
     );
-    if (res.data is List<int>) {
-      return res.data as List<int>;
+    final data = res.data;
+    if (data is Uint8List) {
+      return data;
     }
-    return List<int>.from(res.data as Iterable<dynamic>);
+    return Uint8List.fromList(List<int>.from(data as Iterable));
   }
 
   /// Core request executor with auth headers and automatic retry handling.

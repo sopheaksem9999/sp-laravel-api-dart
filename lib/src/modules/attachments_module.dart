@@ -1,3 +1,4 @@
+import 'dart:typed_data';
 import 'package:dio/dio.dart';
 import '../api_core.dart';
 import '../errors.dart';
@@ -162,7 +163,7 @@ class AttachmentsModule {
 
   /// Fetches the attachment bytes from `rpc/{id}/view` with the client's
   /// auth headers (for protected files that cannot be loaded from a bare URL).
-  Future<List<int>> viewBytes(String id) => api.getBytes(_path([id, 'view']));
+  Future<Uint8List> viewBytes(String id) => api.getBytes(_path([id, 'view']));
 
   /// Builds a view URL for an attachment, supporting optional image dimensions and format.
   String getViewUrl(
