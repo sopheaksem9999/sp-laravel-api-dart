@@ -283,6 +283,7 @@ void main() {
 
   group('dead socket', () {
     test('a pong timeout drops the connection once and reconnects', () async {
+      // Pins the RealtimeTransport contract: close() emits no onDone.
       final t = ScriptedTransport()..answerPings = false;
       final rt = _client(
         t,

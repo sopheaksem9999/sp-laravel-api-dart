@@ -18,11 +18,16 @@ abstract interface class RealtimeTransport {
   Stream<String> get incoming;
 
   /// Stream signaling that the server or the network closed the connection.
+  ///
+  /// Never emitted for a connection closed with [close].
   Stream<void> get onDone;
 
   /// Closes the underlying connection.
   ///
-  /// Need not emit [onDone] ([WebSocketTransport] does not): `SpRealtime`
-  /// handles the loss of a connection it closes itself.
+  /// Must not emit [onDone] for the connection it closes, not even later:
+  /// cancel the stream subscription first, as [WebSocketTransport] does.
+  /// `SpRealtime` handles the loss of a connection it closes itself and may
+  /// already be connecting again; [onDone] is one shared stream, so a late
+  /// event would tear down the new connection.
   Future<void> close([int? code, String? reason]);
 }

@@ -283,7 +283,7 @@ unsubscribe();
 
 `subscribe` completes only after the server confirms the channel (`pusher_internal:subscription_succeeded`), so reading current state right after it returns cannot miss an event. It throws `SpApiError` with code `timeout` when no confirmation arrives within `subscribeTimeout` (default 10 seconds), or the channel authorization error; in both cases no subscription is left registered, so a later reconnect does not rejoin it. A second `subscribe` to a confirmed channel returns at once with no new frame, and concurrent subscribers on a pending channel share one confirmation. They also share its failure: when the first one fails channel authorization, the others throw the same `SpApiError` without an authorization request of their own.
 
-A custom `RealtimeTransport` implementation or test fake must deliver `pusher_internal:subscription_succeeded` for each `pusher:subscribe` it receives, as a real server does, or `subscribe` times out.
+A custom `RealtimeTransport` implementation or test fake must deliver `pusher_internal:subscription_succeeded` for each `pusher:subscribe` it receives, as a real server does, or `subscribe` times out. It also must not emit `onDone` for a connection it closes with `close()`, not even later (cancel the stream subscription first, as `WebSocketTransport` does): the client handles that loss itself and may already be reconnecting, so a late `onDone` would tear down the new connection.
 
 Known limitation: the Pusher protocol has no correlation id, so a very late confirmation (more than `subscribeTimeout`) of an abandoned subscribe frame can complete a new `subscribe` to the same channel early.
 
