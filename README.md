@@ -27,7 +27,7 @@ Add `sp_laravel_api` to your `pubspec.yaml`:
 
 ```yaml
 dependencies:
-  sp_laravel_api: ^0.1.0
+  sp_laravel_api: ^0.2.0
 ```
 
 Or install from git:
@@ -37,7 +37,7 @@ dependencies:
   sp_laravel_api:
     git:
       url: https://github.com/sopheaksem9999/sp-laravel-api-dart.git
-      ref: v0.1.0
+      ref: v0.2.0
 ```
 
 ## Quick Start

@@ -1,6 +1,6 @@
 name: sp_laravel_api
 description: Typed REST client and multi-broadcaster realtime client for the SP Laravel backend packages.
-version: 0.1.0
+version: 0.2.0
 repository: https://github.com/sopheaksem9999/sp-laravel-api-dart
 issue_tracker: https://github.com/sopheaksem9999/sp-laravel-api-dart/issues
 topics:

@@ -23,4 +23,4 @@ export 'src/realtime/transport.dart';
 export 'src/realtime/websocket_transport.dart';
 
 /// Current version of the `sp_laravel_api` package.
-const String packageVersion = '0.1.0';
+const String packageVersion = '0.2.0';
