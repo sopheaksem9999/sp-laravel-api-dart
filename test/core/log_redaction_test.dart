@@ -13,10 +13,15 @@ void main() {
   final headers = (vectors['headers'] as List).cast<Map<String, dynamic>>();
   final bodies = (vectors['bodies'] as List).cast<Map<String, dynamic>>();
   final urls = (vectors['urls'] as List).cast<Map<String, dynamic>>();
+  final perf = (vectors['perf'] as List).cast<Map<String, dynamic>>();
+  String build(Object? parts) => (parts as List)
+      .map((p) => ((p as List)[0] as String) * (p[1] as int))
+      .join();
 
   test('the shared fixture has not been cut down', () {
     expect(headers.length, greaterThanOrEqualTo(46));
-    expect(bodies.length, greaterThanOrEqualTo(103));
+    expect(bodies.length, greaterThanOrEqualTo(106));
+    expect(perf.length, greaterThanOrEqualTo(17));
     expect(urls.length, greaterThanOrEqualTo(69));
   });
 
@@ -46,6 +51,38 @@ void main() {
         );
       });
     }
+  });
+
+  group('perf (every rule stays linear in the input length)', () {
+    for (final v in perf) {
+      test(v['name'] as String, () {
+        final input = v['input'] as Map<String, dynamic>;
+        final text = build(input['parts']);
+        final kind = v['kind'] as String;
+        final json = kind == 'bodyJson' ? jsonDecode(text) : null;
+        final sw = Stopwatch()..start();
+        final Object? out = switch (kind) {
+          'url' => redactUrl(text),
+          'header' => redactHeaders({
+            input['header'] as String: text,
+          })[input['header'] as String],
+          'body' => redactBody(text),
+          _ => redactBody(json),
+        };
+        sw.stop();
+        expect(out, build((v['expected'] as Map)['parts']));
+        expect(sw.elapsedMilliseconds, lessThan(v['maxMs'] as int));
+      });
+    }
+  });
+
+  test('isSpace is exactly the \\s class on every BMP code unit', () {
+    final ws = RegExp(r'\s');
+    final differ = [
+      for (var c = 0; c <= 0xffff; c++)
+        if (isSpace(c) != ws.hasMatch(String.fromCharCode(c))) c,
+    ];
+    expect(differ, isEmpty);
   });
 
   test('redaction does not mutate its input', () {

@@ -9,6 +9,11 @@ const String _redacted = '<redacted>';
 const int _defaultMaxBody = 2048;
 const String _truncMarker = '…[truncated]';
 const int _maxIdRunes = 128;
+
+/// Deepest nesting of lists/maps a body may have; a deeper body is logged as
+/// `<unavailable>` as a whole.
+const int _maxDepth = 100;
+const String _unavailable = '<unavailable>';
 const String _extraKey = 'sp.log';
 
 /// Which requests a [SpLogger] reports.
@@ -211,7 +216,9 @@ const _urlHeaders = {
   'referrer',
   'origin',
 };
-final _linkUrl = RegExp(r'<([^>]*)>');
+// `[^<>]`, not `[^>]`: with many `<` and no `>` the latter rescans to the end
+// from every `<` (quadratic).
+final _linkUrl = RegExp(r'<([^<>]*)>');
 final _refreshUrl = RegExp(r'url\s*=\s*', caseSensitive: false);
 
 /// A PostgREST-style filter group (`or=(...)`, `not.and=(...)`).
@@ -235,10 +242,10 @@ const _operators = {
 
 /// The column of an embed filter inside `select` (`rel(cols,col=op.value)`):
 /// the text before `=` after the start, a `(` or a `,`.
-final _embedColumn = RegExp(r'(?:^|[(,])\s*([^(),=]+)=');
-final _keyParts = RegExp(r'\s*[\[\],.]\s*');
+final _embedColumn = RegExp(r'(?:^|[(,])([^(),=]*)=');
+final _keyParts = RegExp(r'[\[\],.]');
 final _groupItems = RegExp(r'[(),]');
-final _edgeSpace = RegExp(r'^\s+|\s+$');
+final _dashOrUnderscore = RegExp(r'[-_]');
 
 /// Whether a body or query key is sensitive. The key is lower-cased with `-`
 /// and `_` removed; it is sensitive when it equals a listed key (password,
@@ -249,7 +256,7 @@ final _edgeSpace = RegExp(r'^\s+|\s+$');
 /// credential, otp, or code(s) after otp/verification/auth/mfa/reset/
 /// recovery/backup), or starts with password.
 bool isSensitiveKey(String key) {
-  final n = key.toLowerCase().replaceAll(RegExp(r'[-_]'), '');
+  final n = key.toLowerCase().replaceAll(_dashOrUnderscore, '');
   return _sensitiveKeys.contains(n) ||
       _sensitiveSuffix.hasMatch(n) ||
       n.startsWith('password');
@@ -300,9 +307,35 @@ String _decode(String s) {
   }
 }
 
-/// Removes leading and trailing `\s` (the same characters in JS and Dart
-/// regular expressions).
-String _strip(String s) => s.replaceAll(_edgeSpace, '');
+/// The ECMAScript `\s` class (also Dart's) as code units: TAB to CR, space,
+/// U+00A0, U+1680, U+2000-U+200A, U+2028, U+2029, U+202F, U+205F, U+3000,
+/// U+FEFF. A test checks it against `RegExp(r'\s')` for every BMP code unit.
+bool isSpace(int c) =>
+    (c >= 0x09 && c <= 0x0d) ||
+    c == 0x20 ||
+    c == 0xa0 ||
+    c == 0x1680 ||
+    (c >= 0x2000 && c <= 0x200a) ||
+    c == 0x2028 ||
+    c == 0x2029 ||
+    c == 0x202f ||
+    c == 0x205f ||
+    c == 0x3000 ||
+    c == 0xfeff;
+
+/// Removes leading and trailing `\s` characters with two linear scans (a
+/// `\s+$` regular expression is quadratic on inner runs of spaces).
+String _strip(String s) {
+  var a = 0;
+  var b = s.length;
+  while (a < b && isSpace(s.codeUnitAt(a))) {
+    a++;
+  }
+  while (b > a && isSpace(s.codeUnitAt(b - 1))) {
+    b--;
+  }
+  return a == 0 && b == s.length ? s : s.substring(a, b);
+}
 
 /// Whether any (trimmed) segment of a column path (`sessions.pin`) is a
 /// sensitive key.
@@ -324,8 +357,8 @@ bool _isSensitiveQueryKey(String rawKey) {
 /// An item without a dot (a list value, a logic word) is not a condition; one
 /// without an operator word is tested whole.
 bool _isSensitiveCondition(String item) {
+  if (!item.contains('.')) return false;
   final segments = item.split('.').map(_strip).toList();
-  if (segments.length < 2) return false;
   final op = segments.indexWhere(_operators.contains);
   return _isSensitivePath(op < 0 ? segments : segments.sublist(0, op));
 }
@@ -386,12 +419,24 @@ String _truncate(String s, int max) {
   return s.substring(0, cut) + _truncMarker;
 }
 
-Object? _walk(Object? v) {
-  if (v is List) return v.map(_walk).toList();
+/// Thrown by [_walk] past [_maxDepth] nested lists/maps; [redactBody] then
+/// returns `<unavailable>`.
+class _TooDeep {
+  const _TooDeep();
+}
+
+Object? _walk(Object? v, int depth) {
+  if (v is List) {
+    if (depth >= _maxDepth) throw const _TooDeep();
+    return [for (final x in v) _walk(x, depth + 1)];
+  }
   if (v is Map) {
+    if (depth >= _maxDepth) throw const _TooDeep();
     return <String, Object?>{
       for (final e in v.entries)
-        '${e.key}': isSensitiveKey('${e.key}') ? _redacted : _walk(e.value),
+        '${e.key}': isSensitiveKey('${e.key}')
+            ? _redacted
+            : _walk(e.value, depth + 1),
     };
   }
   return v;
@@ -400,11 +445,16 @@ Object? _walk(Object? v) {
 String _redactString(String s) {
   final t = s.trimLeft();
   if (t.startsWith('{') || t.startsWith('[')) {
+    // Only a parse failure means "not JSON"; a body too deep to walk must not
+    // fall through and be echoed.
+    Object? parsed;
+    var isJson = true;
     try {
-      return jsonEncode(_walk(jsonDecode(s)));
-    } catch (_) {
-      // not JSON: fall through
+      parsed = jsonDecode(s);
+    } on FormatException {
+      isJson = false;
     }
+    if (isJson) return jsonEncode(_walk(parsed, 0));
   }
   return RegExp(r'^[^\s=&]+=[^\s&]*(&[^\s=&]+=[^\s&]*)*$').hasMatch(s)
       ? _redactQuery(s)
@@ -418,18 +468,24 @@ String _redactString(String s) {
 /// Maps and lists come back as redacted copies unless their JSON exceeds
 /// [max], in which case a truncated string. `Uint8List`/`List<int>` become
 /// `<N bytes>`, `FormData` `<multipart>`, streams `<stream>`; none is read.
+/// A body nested more than 100 lists/maps deep is `<unavailable>` as a whole.
+/// Linear in the size of the body.
 Object? redactBody(Object? v, {int max = _defaultMaxBody}) {
-  if (v is Uint8List) return '<${v.lengthInBytes} bytes>';
-  if (v is List<int>) return '<${v.length} bytes>';
-  if (v is FormData) return '<multipart>';
-  if (v is Stream || v is ResponseBody) return '<stream>';
-  if (v is String) return _truncate(_redactString(v), max);
-  final r = _walk(v);
-  if (r is Map || r is List) {
-    final s = jsonEncode(r);
-    if (s.length > max) return _truncate(s, max);
+  try {
+    if (v is Uint8List) return '<${v.lengthInBytes} bytes>';
+    if (v is List<int>) return '<${v.length} bytes>';
+    if (v is FormData) return '<multipart>';
+    if (v is Stream || v is ResponseBody) return '<stream>';
+    if (v is String) return _truncate(_redactString(v), max);
+    final r = _walk(v, 0);
+    if (r is Map || r is List) {
+      final s = jsonEncode(r);
+      if (s.length > max) return _truncate(s, max);
+    }
+    return r;
+  } on _TooDeep {
+    return _unavailable;
   }
-  return r;
 }
 
 /// Cleans a server-controlled request id: strips C0/DEL/C1 control characters
@@ -600,6 +656,6 @@ Object? _safely(Object? Function() f) {
   try {
     return f();
   } catch (_) {
-    return '<unavailable>';
+    return _unavailable;
   }
 }
