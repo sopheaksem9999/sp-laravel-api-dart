@@ -17,7 +17,7 @@ void main() {
   test('the shared fixture has not been cut down', () {
     expect(headers.length, greaterThanOrEqualTo(46));
     expect(bodies.length, greaterThanOrEqualTo(103));
-    expect(urls.length, greaterThanOrEqualTo(52));
+    expect(urls.length, greaterThanOrEqualTo(69));
   });
 
   group('sensitive body and query keys are redacted at any depth', () {

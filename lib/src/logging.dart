@@ -217,14 +217,28 @@ final _refreshUrl = RegExp(r'url\s*=\s*', caseSensitive: false);
 /// A PostgREST-style filter group (`or=(...)`, `not.and=(...)`).
 final _groupKey = RegExp(r'^(not\.)?(and|or)$');
 
-/// A column inside a filter group: the text before the first `.` after the
-/// start, a `(` or a `,`.
-final _groupColumn = RegExp(r'(?:^|[(,])\s*([^(),.]+)\.');
+/// Operator words of the SP API filter syntax (the host's
+/// `FilterOperatorCatalog`) and the `not.` prefix. In a filter group item
+/// `path.op.value` the dotted segments before the first of these are the
+/// column path (`sessions.token`).
+const _operators = {
+  'not', 'is', 'is_not', 'eq', 'neq', 'gt', 'gte', 'lt', 'lte', 'in', //
+  'not_in', 'between', 'not_between', 'like', 'ilike', 'not_like',
+  'not_ilike', 'contains', 'starts_with', 'not_starts_with', 'ends_with',
+  'not_ends_with', 'regex', 'not_regex', 'match', 'not_match', 'imatch',
+  'not_imatch', 'date_eq', 'date_neq', 'date_gt', 'date_gte', 'date_lt',
+  'date_lte', 'empty', 'not_empty', 'fts', 'not_fts', 'plfts', 'not_plfts',
+  'phfts', 'not_phfts', 'wfts', 'not_wfts', 'cs', 'not_cs', 'cd', 'not_cd',
+  'ov', 'not_ov', 'sl', 'not_sl', 'sr', 'not_sr', 'nxl', 'not_nxl', 'nxr',
+  'not_nxr', 'adj', 'not_adj',
+};
 
 /// The column of an embed filter inside `select` (`rel(cols,col=op.value)`):
 /// the text before `=` after the start, a `(` or a `,`.
-final _embedColumn = RegExp(r'(?:^|[(,])\s*([^(),.=]+)=');
-final _keyParts = RegExp(r'\s*[\[\],]\s*');
+final _embedColumn = RegExp(r'(?:^|[(,])\s*([^(),=]+)=');
+final _keyParts = RegExp(r'\s*[\[\],.]\s*');
+final _groupItems = RegExp(r'[(),]');
+final _edgeSpace = RegExp(r'^\s+|\s+$');
 
 /// Whether a body or query key is sensitive. The key is lower-cased with `-`
 /// and `_` removed; it is sensitive when it equals a listed key (password,
@@ -286,27 +300,48 @@ String _decode(String s) {
   }
 }
 
-/// A query key is sensitive when it, any bracket segment (`user[password]`)
-/// or any comma-separated part (`AnyOfColumnsFilter`: `api_token,email`) is.
+/// Removes leading and trailing `\s` (the same characters in JS and Dart
+/// regular expressions).
+String _strip(String s) => s.replaceAll(_edgeSpace, '');
+
+/// Whether any (trimmed) segment of a column path (`sessions.pin`) is a
+/// sensitive key.
+bool _isSensitivePath(Iterable<String> segments) =>
+    segments.map(_strip).any((s) => s.isNotEmpty && isSensitiveKey(s));
+
+/// A query key is sensitive when it is, or when any part of it split on `[`,
+/// `]`, `,` or `.` is: a bracket segment (`user[password]`), an
+/// `AnyOfColumnsFilter` column (`api_token,email`) or a relation path segment
+/// (`sessions.pin`).
 bool _isSensitiveQueryKey(String rawKey) {
   final key = _decode(rawKey);
-  return isSensitiveKey(key) ||
-      key.split(_keyParts).any((s) => s.isNotEmpty && isSensitiveKey(s));
+  return isSensitiveKey(key) || _isSensitivePath(key.split(_keyParts));
 }
 
-bool _namesSensitiveColumn(String value, RegExp re) =>
-    re.allMatches(value).any((m) => isSensitiveKey(m[1]!));
+/// One item of a filter group (`path.op.value`): the dotted segments before
+/// the first operator word are the column path, so `sessions.token.eq.x`
+/// tests `sessions` and `token` while `status.eq.token` tests only `status`.
+/// An item without a dot (a list value, a logic word) is not a condition; one
+/// without an operator word is tested whole.
+bool _isSensitiveCondition(String item) {
+  final segments = item.split('.').map(_strip).toList();
+  if (segments.length < 2) return false;
+  final op = segments.indexWhere(_operators.contains);
+  return _isSensitivePath(op < 0 ? segments : segments.sublist(0, op));
+}
 
 /// A value that embeds a condition on a sensitive column, at any nesting
-/// depth: a filter group (`or`, `and`, `not.or`, `not.and`: `col.op.value`)
-/// or a `select` with an embed filter (`rel(cols,col=op.value)`).
+/// depth: a filter group (`or`, `and`, `not.or`, `not.and`: `path.op.value`
+/// items) or a `select` with an embed filter (`rel(cols,path=op.value)`).
 bool _isSensitiveEmbedded(String rawKey, String rawValue) {
   final key = _decode(rawKey);
   if (_groupKey.hasMatch(key)) {
-    return _namesSensitiveColumn(_decode(rawValue), _groupColumn);
+    return _decode(rawValue).split(_groupItems).any(_isSensitiveCondition);
   }
   if (key == 'select') {
-    return _namesSensitiveColumn(_decode(rawValue), _embedColumn);
+    return _embedColumn
+        .allMatches(_decode(rawValue))
+        .any((m) => _isSensitivePath(m[1]!.split('.')));
   }
   return false;
 }

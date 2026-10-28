@@ -622,6 +622,39 @@ void main() {
       },
     );
 
+    test('redacts dotted relation columns', () async {
+      final h = _Harness([
+        _ok(<String, dynamic>{'data': <Object>[], 'meta': <String, dynamic>{}}),
+      ]);
+      final t = h
+          .api(mode: SpLogMode.all)
+          .table<Map<String, dynamic>>('users', fromJson: (j) => j);
+      await t.list(
+        select: 'id',
+        or: [
+          Filter.eq('sessions.token', 'SECRET_REL1'),
+          Filter.eq('status', 'open'),
+        ],
+      );
+      await t.list(
+        select: 'id',
+        where: [Filter.eq('sessions.pin', 'SECRET_REL2')],
+      );
+      await t.list(select: 'id,sessions(id,device.token=eq.SECRET_REL3)');
+      await t.list(
+        select: 'id',
+        or: [
+          Filter.ilike('customer.display_name', 'acme'),
+          Filter.eq('status', 'token'),
+        ],
+      );
+      final all = h.entries.map((e) => e.url).join('\n');
+      for (final s in ['SECRET_REL1', 'SECRET_REL2', 'SECRET_REL3']) {
+        expect(all, isNot(contains(s)));
+      }
+      expect(h.entries[3].url, contains('customer.display_name.ilike.acme'));
+    });
+
     test('works through TableGateway options', () async {
       final h = _Harness([
         _ok(<String, dynamic>{'data': <Object>[], 'meta': <String, dynamic>{}}),
