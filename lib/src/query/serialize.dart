@@ -239,23 +239,18 @@ _SerializedOp _serializeFilter(
   return _SerializedOp(col, op, wireVal);
 }
 
-/// Converts query parameters into the URL parameters expected by the SP Laravel backend.
-Map<String, String> serializeQuery({
+/// The part of a query that says which rows and columns: everything up to and
+/// including `sort`, no paging.
+Map<String, String> _serializeShape({
   String? select,
   List<Filter> where = const [],
   List<Filter>? or,
   Sort? sort,
   String? search,
-  int? perPage,
-  String? cursor,
-  String? direction,
-  String? cursorColumn,
-  int? page,
-  bool? total,
   bool? distinct,
   String? trashed,
-  bool requireSelect = true,
-  bool quoting = true,
+  required bool requireSelect,
+  required bool quoting,
   String? driver,
 }) {
   if (requireSelect && (select == null || select.isEmpty)) {
@@ -340,6 +335,41 @@ Map<String, String> serializeQuery({
     params['order'] = sort.order.name;
   }
 
+  return params;
+}
+
+/// Converts query parameters into the URL parameters expected by the SP Laravel backend.
+Map<String, String> serializeQuery({
+  String? select,
+  List<Filter> where = const [],
+  List<Filter>? or,
+  Sort? sort,
+  String? search,
+  int? perPage,
+  String? cursor,
+  String? direction,
+  String? cursorColumn,
+  int? page,
+  bool? total,
+  bool? distinct,
+  String? trashed,
+  bool requireSelect = true,
+  bool quoting = true,
+  String? driver,
+}) {
+  final params = _serializeShape(
+    select: select,
+    where: where,
+    or: or,
+    sort: sort,
+    search: search,
+    distinct: distinct,
+    trashed: trashed,
+    requireSelect: requireSelect,
+    quoting: quoting,
+    driver: driver,
+  );
+
   if (cursor != null) {
     // An empty cursor is sent as-is (`cursor=`); the backend treats it as
     // the first page, exactly like `0`.
@@ -363,3 +393,32 @@ Map<String, String> serializeQuery({
 
   return params;
 }
+
+/// Like [serializeQuery] without paging, for hosts that run their own list
+/// layer and set `per_page`, `cursor` and the rest themselves. Returns only
+/// `select`, `where`, `or`, `search`, `distinct`, the trashed flags and
+/// `sortby` / `order`: never `per_page`, `page`, `cursor`, `direction`,
+/// `cursor_column` or `total`. Values are quoted exactly like
+/// [serializeQuery]. `select` is optional here (the filters are the point).
+Map<String, String> serializeFilters({
+  String? select,
+  List<Filter> where = const [],
+  List<Filter>? or,
+  Sort? sort,
+  String? search,
+  bool? distinct,
+  String? trashed,
+  bool quoting = true,
+  String? driver,
+}) => _serializeShape(
+  select: select,
+  where: where,
+  or: or,
+  sort: sort,
+  search: search,
+  distinct: distinct,
+  trashed: trashed,
+  requireSelect: false,
+  quoting: quoting,
+  driver: driver,
+);
