@@ -2,6 +2,7 @@
 // test/readme_test.dart verifies each README sample appears here verbatim
 // (ignoring whitespace), and `dart analyze` compiles this file.
 // ignore_for_file: unused_local_variable, avoid_print
+import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:dio/dio.dart';
@@ -252,5 +253,61 @@ Future<void> serverDebugSample(TableGateway<Invoice> invoices) async {
   final page = await invoices.list(
     select: 'id,number',
     options: SpDebug.merge(SpLog.on(headers: true)),
+  );
+}
+
+void filterSamples() {
+  final filters = serializeFilters(
+    where: [Filter.like('name', 'Smith, John (Jr)')],
+    sort: const Sort('name', Order.asc),
+  );
+  print(filters['name']); // like."Smith, John (Jr)"
+  print(filters.containsKey('per_page')); // false
+}
+
+Future<void> uploadOptionSamples(
+  AttachmentsModule attachments,
+  Uint8List bytes,
+) async {
+  final avatar = await attachments.upload(
+    bytes: bytes,
+    filename: 'me.png',
+    width: 512,
+    visibility: 'public',
+  );
+  await attachments.upload(
+    bytes: bytes,
+    filename: 'logo.png',
+    recordType: 'products',
+    recordId: 7,
+    collection: 'logo',
+    replaceOld: true,
+  );
+  await attachments.upload(
+    bytes: bytes,
+    filename: 'draft.pdf',
+    visibility: 'temp_private',
+    tempTimeoutMinutes: 60,
+  );
+}
+
+Future<void> directAndMultipartSamples(
+  AttachmentsModule attachments,
+  Uint8List bytes,
+) async {
+  // Direct: create-upload-url, PUT to the signed URL, complete-upload.
+  final small = await attachments.uploadDirect(
+    filename: 'photo.png',
+    bytes: bytes,
+    contentType: 'image/png',
+  );
+
+  // Multipart (S3 or R2): parts of partSize (at least 5 MiB, default 8 MiB),
+  // `concurrency` at once; a failure aborts the upload and rethrows the error.
+  final big = await attachments.uploadMultipart(
+    filename: 'video.mp4',
+    stream: File('video.mp4').openRead(),
+    totalBytes: File('video.mp4').lengthSync(),
+    onProgress: (loaded, total) => print('$loaded / $total'),
   );
 }

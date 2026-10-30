@@ -180,6 +180,21 @@ final second = await invoices.list(
 print(second.total);
 ```
 
+- **Last page:** `fetchLast` (and `cursorPagination(...).lastPage()`) inverts the `sort`, reads the first page of that, and restores canonical order. It **needs a `sort`**: the host's default sort depends on the table (`created_at` when it has one, else the primary key), so without one it throws `SpApiError` `unencodableValue` before any request.
+
+### Filters without paging
+
+A host that runs its own list layer can use the package's quoting without its paging: `serializeFilters` returns only `select`, `where`, `or`, `search`, `distinct`, the trashed flags and `sortby` / `order`. It never returns `per_page`, `page`, `cursor`, `direction`, `cursor_column` or `total`, and `select` is optional. Tests: [`test/core/serialize_filters_test.dart`](test/core/serialize_filters_test.dart).
+
+```dart
+final filters = serializeFilters(
+  where: [Filter.like('name', 'Smith, John (Jr)')],
+  sort: const Sort('name', Order.asc),
+);
+print(filters['name']); // like."Smith, John (Jr)"
+print(filters.containsKey('per_page')); // false
+```
+
 ## The select rule
 
 Reads must say which columns they want. Omitting `select` throws `SpApiError` (`unencodableValue`) with a message that names the opt-out `requireSelect: false`. Relations are embedded in the `select` string: `rel(*)` for all columns of a relation, `rel(col,child(...))` for nested ones. Tests: [`test/core/query_serializer_test.dart`](test/core/query_serializer_test.dart).
@@ -295,7 +310,7 @@ Tests: [`test/core/api_logging_test.dart`](test/core/api_logging_test.dart), [`t
 
 ## Attachments
 
-`upload` sends one multipart POST (`bytes` or `filePath`, `visibility` defaults to `private`); `link`/`unlink` attach a file to a record; `viewBytes` fetches protected content with your auth headers. Tests: [`test/modules/attachments_upload_test.dart`](test/modules/attachments_upload_test.dart).
+`upload` sends one multipart POST (`bytes` or `filePath`, `visibility` defaults to `private`); `link`/`unlink` attach a file to a record; `viewBytes` fetches protected content with your auth headers. Tests: [`test/modules/attachments_upload_test.dart`](test/modules/attachments_upload_test.dart), [`test/modules/attachments_direct_test.dart`](test/modules/attachments_direct_test.dart), [`test/modules/attachments_multipart_test.dart`](test/modules/attachments_multipart_test.dart), [`test/modules/attachments_path_test.dart`](test/modules/attachments_path_test.dart).
 
 ```dart
 final bytes = Uint8List.fromList([1, 2, 3]);
@@ -304,6 +319,59 @@ await attachments.link('invoices', 7, file['id'].toString());
 final content = await attachments.viewBytes(file['id'].toString());
 await attachments.unlink('invoices', 7, file['id'].toString());
 ```
+
+### Upload options
+
+`upload` also sends the other fields the upload route validates. `recordType`, `recordId` and `collection` link the new file; `replaceOld` replaces what is linked in the same collection (`default` when omitted) of that record and deletes old files nothing else links to, so it needs `recordType` and `recordId`. `tempTimeoutMinutes` and `tempTimeoutAt` (a `String` sent unchanged, or a `DateTime` sent as UTC ISO-8601; the server drops the offset, so a UTC value is only right when the host's `app.timezone` is UTC) only apply to a temporary upload. `width`, `height`, `fit` (`crop` or `contain`), `sizeName` and `asTemp` need the form upload (`upload`). `folderId`, `title` and `caption` work everywhere (on `uploadDirect` and `uploadMultipart` the folder id parameter is `folder`).
+
+```dart
+final avatar = await attachments.upload(
+  bytes: bytes,
+  filename: 'me.png',
+  width: 512,
+  visibility: 'public',
+);
+await attachments.upload(
+  bytes: bytes,
+  filename: 'logo.png',
+  recordType: 'products',
+  recordId: 7,
+  collection: 'logo',
+  replaceOld: true,
+);
+await attachments.upload(
+  bytes: bytes,
+  filename: 'draft.pdf',
+  visibility: 'temp_private',
+  tempTimeoutMinutes: 60,
+);
+```
+
+When the server would silently ignore or override an option the call throws `SpApiError` `unencodableValue` before any request: `asTemp: true` with a `private` / `public` visibility (`asTemp: false` never throws), a timeout without a temporary upload, both timeouts, `replaceOld: true` without a record, `sizeName` with `width` / `height` / `fit`, a `width` or `height` below 1, and resize options or `asTemp: true` on direct and multipart uploads. The server's own ranges (width and height 10 to 3000, title length, timeout cap) are not checked here: its 422 reports them. `visibility` is `null` by default: the form sends `private`, unless `asTemp` is true.
+
+### Direct and multipart upload
+
+Both need `attachments.direct_upload.enabled` on the host and send the file straight to storage through signed URLs (no auth or tenant header goes to storage, and no error contains a signed URL or the upload token). A temporary upload there is `visibility: 'temp_private'` or `'temp_public'`.
+
+```dart
+// Direct: create-upload-url, PUT to the signed URL, complete-upload.
+final small = await attachments.uploadDirect(
+  filename: 'photo.png',
+  bytes: bytes,
+  contentType: 'image/png',
+);
+
+// Multipart (S3 or R2): parts of partSize (at least 5 MiB, default 8 MiB),
+// `concurrency` at once; a failure aborts the upload and rethrows the error.
+final big = await attachments.uploadMultipart(
+  filename: 'video.mp4',
+  stream: File('video.mp4').openRead(),
+  totalBytes: File('video.mp4').lengthSync(),
+  onProgress: (loaded, total) => print('$loaded / $total'),
+);
+```
+
+Resume is not supported (the JS client has it). The ids, table names and `rpcPrefix` that go into a request path are guarded: an empty, `.` or `..` value throws `unencodableValue` and sends nothing. `getViewUrl` and `getDownloadUrl` use your `rpcPrefix`.
 
 ## Realtime Broadcasting
 
