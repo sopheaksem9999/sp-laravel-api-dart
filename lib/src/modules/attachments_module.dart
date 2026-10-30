@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:typed_data';
 import 'package:dio/dio.dart';
 import '../api_core.dart';
@@ -412,13 +413,28 @@ class AttachmentsModule {
     return res;
   }
 
-  /// `sp_attachments/{rpcPrefix}/...segments`, each segment URL-encoded.
+  /// `sp_attachments/{rpcPrefix}/...segments`, each segment URL-encoded. An
+  /// empty, `.` or `..` segment throws `SpApiError(unencodableValue)`: a URL
+  /// parser would normalise it into a different route (an authenticated call
+  /// would then reach it), so nothing is sent.
   String _path(List<Object> segments) {
     final prefix = api.rpcPrefix.replaceAll(RegExp(r'^/+|/+$'), '');
     return [
       'sp_attachments',
       if (prefix.isNotEmpty) prefix,
-      ...segments.map((s) => Uri.encodeComponent(s.toString())),
+      ...segments.map((s) {
+        final text = s.toString();
+        if (text.isEmpty || text == '.' || text == '..') {
+          throw SpApiError(
+            status: 0,
+            code: SpApiErrorCode.unencodableValue,
+            message:
+                'attachments: a path segment cannot be empty, "." or ".." '
+                '(got ${jsonEncode(text)})',
+          );
+        }
+        return Uri.encodeComponent(text);
+      }),
     ].join('/');
   }
 
@@ -547,7 +563,8 @@ class AttachmentsModule {
 
   /// Fetches the attachment bytes from `rpc/{id}/view` with the client's
   /// auth headers (for protected files that cannot be loaded from a bare URL).
-  Future<Uint8List> viewBytes(String id) => api.getBytes(_path([id, 'view']));
+  Future<Uint8List> viewBytes(String id) async =>
+      api.getBytes(_path([id, 'view']));
 
   /// Builds a view URL for an attachment, supporting optional image dimensions and format.
   String getViewUrl(
@@ -558,6 +575,7 @@ class AttachmentsModule {
     String? format,
   }) {
     final cleanBase = api.baseUrl.toString().replaceAll(RegExp(r'/+$'), '');
+    final path = _path([attachmentId as Object, 'view']);
     final queryParts = <String>[];
     if (width != null) queryParts.add('w=$width');
     if (height != null) queryParts.add('h=$height');
@@ -565,13 +583,13 @@ class AttachmentsModule {
     if (format != null) queryParts.add('format=$format');
 
     final qs = queryParts.isEmpty ? '' : '?${queryParts.join('&')}';
-    return '$cleanBase/sp_attachments/rpc/$attachmentId/view$qs';
+    return '$cleanBase/$path$qs';
   }
 
   /// Builds a download URL for an attachment.
   String getDownloadUrl(dynamic attachmentId) {
     final cleanBase = api.baseUrl.toString().replaceAll(RegExp(r'/+$'), '');
-    return '$cleanBase/sp_attachments/rpc/$attachmentId/download';
+    return '$cleanBase/${_path([attachmentId as Object, 'download'])}';
   }
 }
 
