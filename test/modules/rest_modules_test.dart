@@ -114,7 +114,10 @@ void main() {
           onRequest: (options, handler) {
             step++;
             if (step == 1) {
-              expect(options.path, contains('/create-upload-url'));
+              expect(
+                options.path,
+                contains('/sp_attachments/rpc/create-upload-url'),
+              );
               handler.resolve(
                 Response(
                   requestOptions: options,
@@ -122,8 +125,10 @@ void main() {
                   data: {
                     'success': true,
                     'data': {
+                      'key': 'attachments/k1.pdf',
                       'upload_url': 'https://s3.example.com/direct-upload',
-                      'attachment_id': 'att_999',
+                      'upload_token': 'token-1',
+                      'expires_at': 1900000000,
                     },
                   },
                 ),
@@ -139,7 +144,12 @@ void main() {
                 Response(requestOptions: options, statusCode: 200, data: ''),
               );
             } else if (step == 3) {
-              expect(options.path, contains('/complete-upload'));
+              expect(
+                options.path,
+                contains('/sp_attachments/rpc/complete-upload'),
+              );
+              expect(options.data, containsPair('upload_token', 'token-1'));
+              expect(options.data, containsPair('key', 'attachments/k1.pdf'));
               handler.resolve(
                 Response(
                   requestOptions: options,

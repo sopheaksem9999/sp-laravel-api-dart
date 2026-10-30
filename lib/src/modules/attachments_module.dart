@@ -12,7 +12,17 @@ class AttachmentsModule {
   /// Creates an [AttachmentsModule].
   const AttachmentsModule({required this.api});
 
-  /// Uploads raw file bytes directly via signed URL protocol.
+  /// Uploads raw file bytes straight to storage through a signed URL.
+  ///
+  /// Needs `attachments.direct_upload.enabled` on the host. The flow is
+  /// `create-upload-url`, a PUT of the bytes to the signed URL (S3 or R2; no
+  /// auth or tenant header is sent there) or, on a local disk, the file posted
+  /// to `complete-upload` through the API, then `complete-upload` with the
+  /// upload token. [folder] is the folder id. [replaceOld], [title],
+  /// [caption], [tempTimeoutMinutes] and [tempTimeoutAt] are sent on the final
+  /// call with the rules of [upload]; resize options and `asTemp` are form
+  /// upload only, so a temporary upload here is `visibility: 'temp_private'`
+  /// or `'temp_public'`. Errors never contain the signed URL or the token.
   Future<Map<String, dynamic>> uploadDirect({
     required String filename,
     required List<int> bytes,
@@ -21,44 +31,88 @@ class AttachmentsModule {
     String? visibility,
     String? recordType,
     dynamic recordId,
+    String? contentType,
+    bool? replaceOld,
+    String? title,
+    String? caption,
+    int? tempTimeoutMinutes,
+    Object? tempTimeoutAt,
+    CancelToken? cancelToken,
   }) async {
-    final createRes = await api.rpc<Map<String, dynamic>>(
-      'create-upload-url',
-      body: {
-        'filename': filename,
-        'size': bytes.length,
-        if (folder != null) 'folder': folder,
-        if (collection != null) 'collection': collection,
-        if (visibility != null) 'visibility': visibility,
-        if (recordType != null) 'record_type': recordType,
-        if (recordId != null) 'record_id': recordId,
-      },
+    final fields = UploadFieldOptions(
+      visibility: visibility,
+      recordType: recordType,
+      recordId: recordId as Object?,
+      collection: collection,
+      folderId: folder,
+      replaceOld: replaceOld,
+      title: title,
+      caption: caption,
+      tempTimeoutMinutes: tempTimeoutMinutes,
+      tempTimeoutAt: tempTimeoutAt,
     );
+    checkUploadFields(fields, UploadStrategy.direct);
+    final vis = visibility ?? 'private';
 
-    final uploadUrl = createRes['upload_url']?.toString();
-    final attachmentId = createRes['attachment_id'];
-
-    if (uploadUrl == null) {
+    final created = await _call('create-upload-url', {
+      'filename': filename,
+      if (contentType != null) 'content_type': contentType,
+      'visibility': vis,
+      if (folder != null) 'folder_id': folder,
+    }, cancelToken);
+    final uploadKey = created['key'];
+    final uploadToken = created['upload_token'];
+    final expiresAt = created['expires_at'];
+    if (uploadKey == null || uploadToken == null || expiresAt == null) {
       throw SpApiError(
         status: 0,
         code: SpApiErrorCode.unknown,
-        message: 'No upload_url in create-upload-url response',
-        body: createRes,
+        message:
+            'create-upload-url did not return key, upload_token and expires_at',
       );
     }
 
-    // PUT bytes to signed URL
-    await api.dio.put<void>(
-      uploadUrl,
-      data: Stream.fromIterable([bytes]),
-      options: Options(headers: {Headers.contentLengthHeader: bytes.length}),
-    );
+    final complete = <String, Object>{
+      'key': uploadKey as Object,
+      'upload_token': uploadToken as Object,
+      'expires_at': expiresAt as Object,
+      'filename': filename,
+      if (contentType != null) 'content_type': contentType,
+      'visibility': vis,
+      if (folder != null) 'folder_id': folder,
+      if (recordType != null) 'record_type': recordType,
+      if (recordId != null) 'record_id': recordId.toString(),
+      if (collection != null) 'collection_name': collection,
+      ...sharedFields(fields),
+    };
 
-    // Complete upload
-    return api.rpc<Map<String, dynamic>>(
-      'complete-upload',
-      body: {'attachment_id': attachmentId},
+    final url = created['upload_url'];
+    if (url is String && url.isNotEmpty) {
+      await _storagePut(
+        url,
+        (created['method'] ?? 'PUT').toString(),
+        created['headers'],
+        bytes,
+        cancelToken,
+        'direct',
+      );
+      return _call('complete-upload', complete, cancelToken);
+    }
+
+    // Local disk: the backend answers `upload_url: null`; the file is posted
+    // to `complete-upload` through the API with the token fields.
+    final form = FormData.fromMap({
+      'file': MultipartFile.fromBytes(bytes, filename: filename),
+      for (final e in complete.entries) e.key: e.value.toString(),
+    });
+    final res = await api.request(
+      'POST',
+      _path(['complete-upload']),
+      data: form,
+      options: Options(contentType: 'multipart/form-data'),
+      cancelToken: cancelToken,
     );
+    return _unwrapMap(res.data);
   }
 
   /// Uploads large files in chunks via multipart protocol.
@@ -93,6 +147,97 @@ class AttachmentsModule {
       'complete-multipart-upload',
       body: {'upload_id': uploadId, 'key': key, 'parts': <dynamic>[]},
     );
+  }
+
+  /// One JSON `POST sp_attachments/{rpcPrefix}/{fn}`; resolves the unwrapped data map.
+  Future<Map<String, dynamic>> _call(
+    String fn,
+    Map<String, dynamic> body,
+    CancelToken? cancelToken,
+  ) async {
+    final res = await api.request(
+      'POST',
+      _path([fn]),
+      data: body,
+      cancelToken: cancelToken,
+    );
+    return _unwrapMap(res.data);
+  }
+
+  Map<String, dynamic> _unwrapMap(dynamic raw) {
+    if (raw is Map<String, dynamic>) {
+      final data = raw['data'];
+      if (data is Map<String, dynamic>) return data;
+      return raw;
+    }
+    return <String, dynamic>{};
+  }
+
+  /// Headers the backend asks the client to send to storage. Values may be
+  /// lists; `Host` and `Content-Length` are set by the transport.
+  Map<String, String> _storageHeaders(Object? h) {
+    final out = <String, String>{};
+    if (h is! Map) return out;
+    h.forEach((k, v) {
+      final name = k.toString();
+      final lower = name.toLowerCase();
+      if (lower == 'host' || lower == 'content-length') return;
+      if (v is List) {
+        out[name] = v.map((e) => e.toString()).join(', ');
+      } else if (v != null) {
+        out[name] = v.toString();
+      }
+    });
+    return out;
+  }
+
+  /// Sends [data] to a signed storage URL with the dio client directly, so no
+  /// auth, tenant or request-id header goes along. A signed URL is a
+  /// credential: it never ends up in an error.
+  Future<Response<dynamic>> _storagePut(
+    String url,
+    String method,
+    Object? headers,
+    List<int> data,
+    CancelToken? cancelToken,
+    String what,
+  ) async {
+    final Response<dynamic> res;
+    try {
+      res = await api.dio.request<dynamic>(
+        url,
+        data: Uint8List.fromList(data),
+        cancelToken: cancelToken,
+        options: Options(
+          method: method,
+          headers: _storageHeaders(headers),
+          validateStatus: (_) => true,
+          responseType: ResponseType.plain,
+        ),
+      );
+    } on DioException catch (e) {
+      if (e.type == DioExceptionType.cancel) rethrow;
+      final timeout =
+          e.type == DioExceptionType.connectionTimeout ||
+          e.type == DioExceptionType.sendTimeout ||
+          e.type == DioExceptionType.receiveTimeout;
+      throw SpApiError(
+        status: 0,
+        code: timeout ? SpApiErrorCode.timeout : SpApiErrorCode.network,
+        message:
+            'Storage upload ($what) failed: '
+            '${timeout ? 'timeout' : 'network error'}',
+      );
+    }
+    final status = res.statusCode ?? 0;
+    if (status < 200 || status >= 300) {
+      throw SpApiError(
+        status: status,
+        code: status >= 500 ? SpApiErrorCode.server : SpApiErrorCode.unknown,
+        message: 'Storage upload ($what) failed with status $status',
+      );
+    }
+    return res;
   }
 
   /// `sp_attachments/{rpcPrefix}/...segments`, each segment URL-encoded.
