@@ -1,6 +1,10 @@
+import 'dart:typed_data';
+
 import 'package:dio/dio.dart';
 import 'package:sp_laravel_api/sp_laravel_api.dart';
 import 'package:test/test.dart';
+
+import '../support/fake_adapter.dart';
 
 const sig = 'SIG-SECRET';
 const token = 'TOKEN-SECRET-abc123';
@@ -9,6 +13,7 @@ const key = 'attachments/private/k-secret.bin';
 void main() {
   late List<RequestOptions> seen;
   late AttachmentsModule attachments;
+  late Dio theDio;
   late Map<String, Response<dynamic> Function(RequestOptions)> routes;
   late Response<dynamic> Function(RequestOptions) onPut;
 
@@ -41,23 +46,14 @@ void main() {
       'complete-upload': (o) => ok(o, {'id': 7, 'filename': 'a.png'}),
     };
     onPut = (o) => Response(requestOptions: o, statusCode: 200);
-    final dio = Dio();
-    dio.interceptors.add(
-      InterceptorsWrapper(
-        onRequest: (options, handler) {
-          seen.add(options);
-          if (options.uri.host == 's3.test') {
-            handler.resolve(onPut(options));
-            return;
-          }
-          final route = routes[fn(options)];
-          if (route == null) {
-            fail('no route for ${options.uri}');
-          }
-          handler.resolve(route(options));
-        },
-      ),
-    );
+    final dio = theDio = Dio();
+    dio.httpClientAdapter = FakeAdapter((options) {
+      seen.add(options);
+      if (options.uri.host == 's3.test') return onPut(options);
+      final route = routes[fn(options)];
+      if (route == null) fail('no route for ${options.uri}');
+      return route(options);
+    });
     final api = SpApi(
       baseUrl: Uri.parse('https://host.test/api'),
       dio: dio,
@@ -251,6 +247,61 @@ void main() {
       expect(e, isNotNull);
       expect(order(), ['create-upload-url']);
       expect('${e!.message} ${e.body}', isNot(contains('s3.test')));
+    });
+
+    test('the PUT carries no Authorization even when an interceptor on the Dio '
+        'adds one (attach(dio) from sp_jwt_auth)', () async {
+      theDio.interceptors.add(
+        InterceptorsWrapper(
+          onRequest: (o, h) {
+            o.headers['Authorization'] = 'Bearer from-interceptor';
+            h.next(o);
+          },
+        ),
+      );
+      await attachments.uploadDirect(filename: 'a.png', bytes: [1, 2, 3]);
+      expect(order(), ['create-upload-url', 'PUT', 'complete-upload']);
+      expect(seen[0].headers['Authorization'], 'Bearer from-interceptor');
+      expect(seen[1].headers['Authorization'], isNull);
+    });
+
+    test('a Uint8List is sent as is, without another copy', () async {
+      final payload = Uint8List.fromList([1, 2, 3, 4]);
+      await attachments.uploadDirect(filename: 'a.png', bytes: payload);
+      expect(identical(seen[1].data, payload), isTrue);
+    });
+
+    test('a cancelled PUT rethrows a cancel error that does not hold the '
+        'signed URL', () async {
+      onPut = (o) =>
+          throw DioException(requestOptions: o, type: DioExceptionType.cancel);
+      final e = await attachments
+          .uploadDirect(filename: 'a.png', bytes: [1])
+          .then<DioException?>(
+            (_) => null,
+            onError: (Object e) => e as DioException,
+          );
+      expect(e, isNotNull);
+      expect(e!.type, DioExceptionType.cancel);
+      expect(e.requestOptions.uri.toString(), isNot(contains(sig)));
+      expect('${e.requestOptions.data}', isNot(contains(token)));
+    });
+
+    test('a transport failure on an upload call has no cause that holds the '
+        'token or the key', () async {
+      routes['complete-upload'] = (o) => throw DioException.connectionError(
+        requestOptions: o,
+        reason: 'refused',
+      );
+      final e = await attachments
+          .uploadDirect(filename: 'a.png', bytes: [1])
+          .then<SpApiError?>(
+            (_) => null,
+            onError: (Object e) => e as SpApiError,
+          );
+      expect(e, isNotNull);
+      expect(e!.isTransport, isTrue);
+      expect(e.cause, isNull);
     });
 
     test(

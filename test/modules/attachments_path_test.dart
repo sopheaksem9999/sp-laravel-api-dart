@@ -60,7 +60,7 @@ void main() {
       );
     }
 
-    test('normal ids encode as before', () {
+    test('ids are percent-encoded', () {
       final att = moduleWith();
       expect(
         att.getViewUrl('a b/c'),
@@ -69,6 +69,33 @@ void main() {
       expect(
         att.getDownloadUrl(12),
         'https://example.com/api/v1/sp_attachments/rpc/12/download',
+      );
+    });
+  });
+
+  group('rpcPrefix guard', () {
+    for (final prefix in ['..', '.', 'a/../b', 'a//b']) {
+      test("an rpcPrefix of '$prefix' throws and sends nothing", () async {
+        final att = moduleWith(rpcPrefix: prefix);
+        expect(() => att.getViewUrl('att_1'), throwsA(unencodable()));
+        await expectLater(att.viewBytes('att_1'), throwsA(unencodable()));
+        expect(seen, isEmpty);
+      });
+    }
+
+    test('a normal multi-segment prefix still works', () {
+      final att = moduleWith(rpcPrefix: 'v2/t');
+      expect(
+        att.getViewUrl('att_1'),
+        'https://example.com/api/v1/sp_attachments/v2/t/att_1/view',
+      );
+    });
+
+    test('a null id still builds a URL like before (no TypeError)', () {
+      final att = moduleWith();
+      expect(
+        att.getViewUrl(null),
+        'https://example.com/api/v1/sp_attachments/rpc/null/view',
       );
     });
   });

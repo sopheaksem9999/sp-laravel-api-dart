@@ -116,12 +116,11 @@ class AttachmentsModule {
       'file': MultipartFile.fromBytes(bytes, filename: filename),
       for (final e in complete.entries) e.key: e.value.toString(),
     });
-    final res = await api.request(
-      'POST',
-      _path(['complete-upload']),
-      data: form,
+    final res = await _post(
+      'complete-upload',
+      form,
+      cancelToken,
       options: Options(contentType: 'multipart/form-data'),
-      cancelToken: cancelToken,
     );
     return _unwrapMap(res.data);
   }
@@ -221,6 +220,16 @@ class AttachmentsModule {
     Object? failure;
     StackTrace? failureStack;
     var loaded = 0;
+    // One failure (or the caller's cancel) stops every part in flight.
+    final stop = CancelToken();
+    cancelToken?.whenCancel.then((_) {
+      if (!stop.isCancelled) stop.cancel('multipart upload cancelled');
+    });
+    void fail(Object e, StackTrace st) {
+      failure ??= e;
+      failureStack ??= st;
+      if (!stop.isCancelled) stop.cancel('multipart upload stopped');
+    }
 
     Future<void> uploadPart(_Part p) async {
       if (failure != null) return;
@@ -228,7 +237,7 @@ class AttachmentsModule {
         ...tokenFields,
         'part_number': p.number,
         'visibility': vis,
-      }, cancelToken);
+      }, stop);
       final url = signed['url'];
       if (url is! String || url.isEmpty) {
         throw SpApiError(
@@ -243,7 +252,7 @@ class AttachmentsModule {
         'PUT',
         signed['headers'],
         p.bytes,
-        cancelToken,
+        stop,
         'part ${p.number}',
       );
       final etag = res.headers.value('etag');
@@ -264,32 +273,35 @@ class AttachmentsModule {
 
     try {
       var count = 0;
-      await for (final p in _cutParts(stream, partSize)) {
-        if (failure != null) break;
-        if (cancelToken != null && cancelToken.isCancelled) {
-          throw DioException(
-            requestOptions: RequestOptions(path: 'multipart-upload'),
-            type: DioExceptionType.cancel,
-            message: 'Request was cancelled',
-          );
+      try {
+        await for (final p in _cutParts(stream, partSize)) {
+          if (failure != null) break;
+          if (cancelToken != null && cancelToken.isCancelled) {
+            throw DioException(
+              requestOptions: RequestOptions(path: 'multipart-upload'),
+              type: DioExceptionType.cancel,
+              message: 'Request was cancelled',
+            );
+          }
+          if (++count > maxParts) {
+            throw _uploadError(
+              'more than $maxParts parts; use a larger partSize',
+            );
+          }
+          while (active.length >= concurrency) {
+            await Future.any(active);
+          }
+          late Future<void> task;
+          task = uploadPart(
+            p,
+          ).catchError(fail).whenComplete(() => active.remove(task));
+          active.add(task);
         }
-        if (++count > maxParts) {
-          throw _uploadError(
-            'more than $maxParts parts; use a larger partSize',
-          );
-        }
-        while (active.length >= concurrency) {
-          await Future.any(active);
-        }
-        late Future<void> task;
-        task = uploadPart(p)
-            .catchError((Object e, StackTrace st) {
-              failure ??= e;
-              failureStack ??= st;
-            })
-            .whenComplete(() => active.remove(task));
-        active.add(task);
+      } catch (e, st) {
+        // A stream error, the part limit or a cancel: stop the parts in flight.
+        fail(e, st);
       }
+      // Never abort while a part is still uploading: it could outlive the abort.
       await Future.wait(active);
       if (failure != null) Error.throwWithStackTrace(failure!, failureStack!);
       if (totalBytes == null) onProgress?.call(loaded, loaded);
@@ -307,7 +319,7 @@ class AttachmentsModule {
         if (recordId != null) 'record_id': recordId.toString(),
         if (collection != null) 'collection_name': collection,
         ...sharedFields(fields),
-      }, cancelToken);
+      }, stop);
     } catch (_) {
       // Best-effort cleanup; it never masks the original error.
       try {
@@ -322,20 +334,45 @@ class AttachmentsModule {
     }
   }
 
+  /// One `POST sp_attachments/{rpcPrefix}/{fn}`. A transport failure is
+  /// rethrown without its `cause` and stack: the underlying `DioException`
+  /// holds the request body, which carries the upload token and the key.
+  Future<Response<dynamic>> _post(
+    String fn,
+    Object data,
+    CancelToken? cancelToken, {
+    Options? options,
+  }) async {
+    try {
+      return await api.request(
+        'POST',
+        _path([fn]),
+        data: data,
+        options: options,
+        cancelToken: cancelToken,
+      );
+    } on SpApiError catch (e) {
+      if (e.cause == null && e.stackTrace == null) rethrow;
+      throw SpApiError(
+        status: e.status,
+        code: e.code,
+        message: e.message,
+        errorCode: e.errorCode,
+        fieldErrors: e.fieldErrors,
+        requestId: e.requestId,
+        retryAfter: e.retryAfter,
+        body: e.body,
+        tenantRequired: e.tenantRequired,
+      );
+    }
+  }
+
   /// One JSON `POST sp_attachments/{rpcPrefix}/{fn}`; resolves the unwrapped data map.
   Future<Map<String, dynamic>> _call(
     String fn,
     Map<String, dynamic> body,
     CancelToken? cancelToken,
-  ) async {
-    final res = await api.request(
-      'POST',
-      _path([fn]),
-      data: body,
-      cancelToken: cancelToken,
-    );
-    return _unwrapMap(res.data);
-  }
+  ) async => _unwrapMap((await _post(fn, body, cancelToken)).data);
 
   Map<String, dynamic> _unwrapMap(dynamic raw) {
     if (raw is Map<String, dynamic>) {
@@ -364,9 +401,12 @@ class AttachmentsModule {
     return out;
   }
 
-  /// Sends [data] to a signed storage URL with the dio client directly, so no
-  /// auth, tenant or request-id header goes along. A signed URL is a
-  /// credential: it never ends up in an error.
+  /// Sends [data] to a signed storage URL. It uses a bare `Dio` that shares
+  /// only the transport (the adapter and the timeouts) of the client's `Dio`:
+  /// interceptors and default headers of that `Dio` (for example the bearer
+  /// token `attach(dio)` from `sp_jwt_auth` adds) must not reach storage, which
+  /// rejects a presigned request that also carries an `Authorization` header.
+  /// A signed URL is a credential: it never ends up in an error.
   Future<Response<dynamic>> _storagePut(
     String url,
     String method,
@@ -375,11 +415,19 @@ class AttachmentsModule {
     CancelToken? cancelToken,
     String what,
   ) async {
+    final shared = api.dio.options;
+    final storage = Dio(
+      BaseOptions(
+        connectTimeout: shared.connectTimeout,
+        sendTimeout: shared.sendTimeout,
+        receiveTimeout: shared.receiveTimeout,
+      ),
+    )..httpClientAdapter = api.dio.httpClientAdapter;
     final Response<dynamic> res;
     try {
-      res = await api.dio.request<dynamic>(
+      res = await storage.request<dynamic>(
         url,
-        data: Uint8List.fromList(data),
+        data: data is Uint8List ? data : Uint8List.fromList(data),
         cancelToken: cancelToken,
         options: Options(
           method: method,
@@ -389,7 +437,14 @@ class AttachmentsModule {
         ),
       );
     } on DioException catch (e) {
-      if (e.type == DioExceptionType.cancel) rethrow;
+      if (e.type == DioExceptionType.cancel) {
+        // The original holds the signed URL in its request options.
+        throw DioException(
+          requestOptions: RequestOptions(path: 'storage-upload'),
+          type: DioExceptionType.cancel,
+          message: 'Request was cancelled',
+        );
+      }
       final timeout =
           e.type == DioExceptionType.connectionTimeout ||
           e.type == DioExceptionType.sendTimeout ||
@@ -414,27 +469,29 @@ class AttachmentsModule {
   }
 
   /// `sp_attachments/{rpcPrefix}/...segments`, each segment URL-encoded. An
-  /// empty, `.` or `..` segment throws `SpApiError(unencodableValue)`: a URL
-  /// parser would normalise it into a different route (an authenticated call
-  /// would then reach it), so nothing is sent.
+  /// empty, `.` or `..` segment (in the prefix too) throws
+  /// `SpApiError(unencodableValue)`: a URL parser would normalise it into a
+  /// different route (an authenticated call would then reach it), so nothing
+  /// is sent.
   String _path(List<Object> segments) {
     final prefix = api.rpcPrefix.replaceAll(RegExp(r'^/+|/+$'), '');
+    String guard(String text) {
+      if (text.isEmpty || text == '.' || text == '..') {
+        throw SpApiError(
+          status: 0,
+          code: SpApiErrorCode.unencodableValue,
+          message:
+              'attachments: a path segment cannot be empty, "." or ".." '
+              '(got ${jsonEncode(text)})',
+        );
+      }
+      return text;
+    }
+
     return [
       'sp_attachments',
-      if (prefix.isNotEmpty) prefix,
-      ...segments.map((s) {
-        final text = s.toString();
-        if (text.isEmpty || text == '.' || text == '..') {
-          throw SpApiError(
-            status: 0,
-            code: SpApiErrorCode.unencodableValue,
-            message:
-                'attachments: a path segment cannot be empty, "." or ".." '
-                '(got ${jsonEncode(text)})',
-          );
-        }
-        return Uri.encodeComponent(text);
-      }),
+      if (prefix.isNotEmpty) ...prefix.split('/').map(guard),
+      ...segments.map((s) => Uri.encodeComponent(guard(s.toString()))),
     ].join('/');
   }
 
@@ -575,7 +632,7 @@ class AttachmentsModule {
     String? format,
   }) {
     final cleanBase = api.baseUrl.toString().replaceAll(RegExp(r'/+$'), '');
-    final path = _path([attachmentId as Object, 'view']);
+    final path = _path([attachmentId.toString(), 'view']);
     final queryParts = <String>[];
     if (width != null) queryParts.add('w=$width');
     if (height != null) queryParts.add('h=$height');
@@ -589,7 +646,7 @@ class AttachmentsModule {
   /// Builds a download URL for an attachment.
   String getDownloadUrl(dynamic attachmentId) {
     final cleanBase = api.baseUrl.toString().replaceAll(RegExp(r'/+$'), '');
-    return '$cleanBase/${_path([attachmentId as Object, 'download'])}';
+    return '$cleanBase/${_path([attachmentId.toString(), 'download'])}';
   }
 }
 

@@ -3,6 +3,8 @@ import 'package:dio/dio.dart';
 import 'package:sp_laravel_api/sp_laravel_api.dart';
 import 'package:test/test.dart';
 
+import '../support/fake_adapter.dart';
+
 void main() {
   group('BulkModule', () {
     test(
@@ -109,61 +111,45 @@ void main() {
       final dio = Dio();
       int step = 0;
 
-      dio.interceptors.add(
-        InterceptorsWrapper(
-          onRequest: (options, handler) {
-            step++;
-            if (step == 1) {
-              expect(
-                options.path,
-                contains('/sp_attachments/rpc/create-upload-url'),
-              );
-              handler.resolve(
-                Response(
-                  requestOptions: options,
-                  statusCode: 200,
-                  data: {
-                    'success': true,
-                    'data': {
-                      'key': 'attachments/k1.pdf',
-                      'upload_url': 'https://s3.example.com/direct-upload',
-                      'upload_token': 'token-1',
-                      'expires_at': 1900000000,
-                    },
-                  },
-                ),
-              );
-            } else if (step == 2) {
-              // Direct PUT to upload URL
-              expect(
-                options.path,
-                equals('https://s3.example.com/direct-upload'),
-              );
-              expect(options.method, equals('PUT'));
-              handler.resolve(
-                Response(requestOptions: options, statusCode: 200, data: ''),
-              );
-            } else if (step == 3) {
-              expect(
-                options.path,
-                contains('/sp_attachments/rpc/complete-upload'),
-              );
-              expect(options.data, containsPair('upload_token', 'token-1'));
-              expect(options.data, containsPair('key', 'attachments/k1.pdf'));
-              handler.resolve(
-                Response(
-                  requestOptions: options,
-                  statusCode: 200,
-                  data: {
-                    'success': true,
-                    'data': {'id': 'att_999', 'filename': 'doc.pdf'},
-                  },
-                ),
-              );
-            }
+      dio.httpClientAdapter = FakeAdapter((options) {
+        step++;
+        if (step == 1) {
+          expect(
+            options.path,
+            contains('/sp_attachments/rpc/create-upload-url'),
+          );
+          return Response(
+            requestOptions: options,
+            statusCode: 200,
+            data: {
+              'success': true,
+              'data': {
+                'key': 'attachments/k1.pdf',
+                'upload_url': 'https://s3.example.com/direct-upload',
+                'upload_token': 'token-1',
+                'expires_at': 1900000000,
+              },
+            },
+          );
+        } else if (step == 2) {
+          // Direct PUT to upload URL
+          expect(options.path, equals('https://s3.example.com/direct-upload'));
+          expect(options.method, equals('PUT'));
+          return Response(requestOptions: options, statusCode: 200, data: '');
+        }
+        expect(step, equals(3));
+        expect(options.path, contains('/sp_attachments/rpc/complete-upload'));
+        expect(options.data, containsPair('upload_token', 'token-1'));
+        expect(options.data, containsPair('key', 'attachments/k1.pdf'));
+        return Response(
+          requestOptions: options,
+          statusCode: 200,
+          data: {
+            'success': true,
+            'data': {'id': 'att_999', 'filename': 'doc.pdf'},
           },
-        ),
-      );
+        );
+      });
 
       final api = SpApi(
         baseUrl: Uri.parse('https://example.com/api/v1'),

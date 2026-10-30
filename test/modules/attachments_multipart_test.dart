@@ -5,6 +5,8 @@ import 'package:dio/dio.dart';
 import 'package:sp_laravel_api/sp_laravel_api.dart';
 import 'package:test/test.dart';
 
+import '../support/fake_adapter.dart';
+
 const sig = 'SIG-SECRET';
 const token = 'TOKEN-SECRET-abc123';
 const key = 'attachments/private/k-secret.bin';
@@ -61,24 +63,13 @@ void main() {
     };
     onPut = putOk;
     final dio = Dio();
-    dio.interceptors.add(
-      InterceptorsWrapper(
-        onRequest: (options, handler) async {
-          seen.add(options);
-          if (options.uri.host == 's3.test') {
-            try {
-              handler.resolve(await onPut(options));
-            } on DioException catch (e) {
-              handler.reject(e);
-            }
-            return;
-          }
-          final route = routes[fn(options)];
-          if (route == null) fail('no route for ${options.uri}');
-          handler.resolve(await route(options));
-        },
-      ),
-    );
+    dio.httpClientAdapter = FakeAdapter((options) async {
+      seen.add(options);
+      if (options.uri.host == 's3.test') return onPut(options);
+      final route = routes[fn(options)];
+      if (route == null) fail('no route for ${options.uri}');
+      return route(options);
+    });
     final api = SpApi(
       baseUrl: Uri.parse('https://host.test/api'),
       dio: dio,
@@ -283,6 +274,49 @@ void main() {
         }
       },
     );
+
+    test('a stream error aborts only after the in-flight parts finish and no '
+        'progress arrives after the failure', () async {
+      final log = <String>[];
+      onPut = (o) async {
+        log.add('put-start ${partNumber(o)}');
+        await Future<void>.delayed(const Duration(milliseconds: 40));
+        log.add('put-end ${partNumber(o)}');
+        return putOk(o);
+      };
+      final base = routes['abort-multipart-upload']!;
+      routes['abort-multipart-upload'] = (o) {
+        log.add('abort');
+        return base(o);
+      };
+      Stream<List<int>> broken() async* {
+        yield Uint8List(part);
+        yield Uint8List(part);
+        throw StateError('read failed');
+      }
+
+      var progressAfterFailure = false;
+      var failed = false;
+      final e = await attachments
+          .uploadMultipart(
+            filename: 'a.bin',
+            stream: broken(),
+            partSize: part,
+            concurrency: 2,
+            onProgress: (l, t) {
+              if (failed) progressAfterFailure = true;
+            },
+          )
+          .then<Object?>((_) => null, onError: (Object e) => e);
+      failed = true;
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+      expect(e, isA<StateError>());
+      expect(log.indexOf('abort'), greaterThan(log.indexOf('put-end 1')));
+      expect(log.indexOf('abort'), greaterThan(log.indexOf('put-end 2')));
+      expect(order().where((s) => s == 'abort-multipart-upload').length, 1);
+      expect(order().contains('complete-multipart-upload'), isFalse);
+      expect(progressAfterFailure, isFalse);
+    });
 
     test('partSize below 5 MiB, concurrency 0 and too many parts throw '
         'before any request', () async {
