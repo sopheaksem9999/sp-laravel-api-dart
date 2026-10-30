@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:typed_data';
 import 'package:dio/dio.dart';
 import '../api_core.dart';
@@ -6,6 +7,15 @@ import 'upload_fields.dart';
 
 /// Module for handling SP attachments, direct and multipart uploads, and URL helpers.
 class AttachmentsModule {
+  /// S3's minimum size of every part but the last (5 MiB).
+  static const int minPartSize = 5 * 1024 * 1024;
+
+  /// Default bytes per part for [uploadMultipart] (8 MiB).
+  static const int defaultPartSize = 8 * 1024 * 1024;
+
+  /// Most parts one multipart upload may have.
+  static const int maxParts = 10000;
+
   /// The parent [SpApi] client.
   final SpApi api;
 
@@ -115,38 +125,200 @@ class AttachmentsModule {
     return _unwrapMap(res.data);
   }
 
-  /// Uploads large files in chunks via multipart protocol.
+  /// Uploads a large file to S3 or R2 in parts.
+  ///
+  /// Needs `attachments.direct_upload.enabled` on the host. The flow is
+  /// `create-multipart-upload`, then for every part `sign-multipart-part` and
+  /// a PUT to the signed URL (no auth or tenant header; the response must carry
+  /// an `ETag` header, so the bucket CORS policy must expose it on the web),
+  /// then `complete-multipart-upload`. [stream] is cut into exact [partSize]
+  /// parts (the last is smaller; an empty stream is one empty part), at most
+  /// [concurrency] parts in flight, signed right before their PUT. On any
+  /// failure the upload is aborted once (best effort) and the original error is
+  /// rethrown. [partSize] is at least 5 MiB ([minPartSize]); at most
+  /// [maxParts] parts. [totalBytes] is optional: with it [onProgress] gets the
+  /// total, without it the final call reports `loaded == total`. [folder] is
+  /// the folder id. [replaceOld], [title], [caption], [tempTimeoutMinutes] and
+  /// [tempTimeoutAt] go out on the final call with the rules of [upload];
+  /// resize options and `asTemp` are form upload only. Resume is not
+  /// supported. Errors never contain a signed URL, the token or the key.
   Future<Map<String, dynamic>> uploadMultipart({
     required String filename,
     required Stream<List<int>> stream,
-    required int totalBytes,
+    int? totalBytes,
     String? folder,
     String? collection,
     String? visibility,
     String? recordType,
     dynamic recordId,
+    String? contentType,
+    int partSize = defaultPartSize,
+    int concurrency = 4,
+    void Function(int loaded, int? total)? onProgress,
+    bool? replaceOld,
+    String? title,
+    String? caption,
+    int? tempTimeoutMinutes,
+    Object? tempTimeoutAt,
+    CancelToken? cancelToken,
   }) async {
-    final createRes = await api.rpc<Map<String, dynamic>>(
-      'create-multipart-upload',
-      body: {
+    final fields = UploadFieldOptions(
+      visibility: visibility,
+      recordType: recordType,
+      recordId: recordId as Object?,
+      collection: collection,
+      folderId: folder,
+      replaceOld: replaceOld,
+      title: title,
+      caption: caption,
+      tempTimeoutMinutes: tempTimeoutMinutes,
+      tempTimeoutAt: tempTimeoutAt,
+    );
+    checkUploadFields(fields, UploadStrategy.multipart);
+    if (partSize < minPartSize) {
+      throw _uploadError(
+        'partSize must be at least $minPartSize bytes (5 MiB)',
+      );
+    }
+    if (concurrency < 1) {
+      throw _uploadError('concurrency must be a positive integer');
+    }
+    if (totalBytes != null && (totalBytes / partSize).ceil() > maxParts) {
+      throw _uploadError('more than $maxParts parts; use a larger partSize');
+    }
+    final vis = visibility ?? 'private';
+
+    final created = await _call('create-multipart-upload', {
+      'filename': filename,
+      if (contentType != null) 'content_type': contentType,
+      'visibility': vis,
+      if (folder != null) 'folder_id': folder,
+    }, cancelToken);
+    if (created['key'] == null ||
+        created['upload_id'] == null ||
+        created['upload_token'] == null ||
+        created['expires_at'] == null) {
+      throw SpApiError(
+        status: 0,
+        code: SpApiErrorCode.unknown,
+        message:
+            'create-multipart-upload did not return key, upload_id, '
+            'upload_token and expires_at',
+      );
+    }
+    // The token is bound to the key, the disk (from the visibility), the
+    // tenant, the upload id and the expiry: send them identically every time.
+    final tokenFields = <String, Object>{
+      'key': created['key'] as Object,
+      'upload_id': created['upload_id'] as Object,
+      'upload_token': created['upload_token'] as Object,
+      'expires_at': created['expires_at'] as Object,
+    };
+
+    final done = <int, String>{};
+    final active = <Future<void>>{};
+    Object? failure;
+    StackTrace? failureStack;
+    var loaded = 0;
+
+    Future<void> uploadPart(_Part p) async {
+      if (failure != null) return;
+      final signed = await _call('sign-multipart-part', {
+        ...tokenFields,
+        'part_number': p.number,
+        'visibility': vis,
+      }, cancelToken);
+      final url = signed['url'];
+      if (url is! String || url.isEmpty) {
+        throw SpApiError(
+          status: 0,
+          code: SpApiErrorCode.unknown,
+          message:
+              'sign-multipart-part did not return a url for part ${p.number}',
+        );
+      }
+      final res = await _storagePut(
+        url,
+        'PUT',
+        signed['headers'],
+        p.bytes,
+        cancelToken,
+        'part ${p.number}',
+      );
+      final etag = res.headers.value('etag');
+      if (etag == null || etag.isEmpty) {
+        throw SpApiError(
+          status: res.statusCode ?? 0,
+          code: SpApiErrorCode.unknown,
+          message:
+              'Storage response for part ${p.number} has no ETag header; the '
+              'bucket CORS policy must expose it (ExposeHeaders: ETag)',
+        );
+      }
+      if (failure != null) return;
+      done[p.number] = etag;
+      loaded += p.bytes.length;
+      onProgress?.call(loaded, totalBytes);
+    }
+
+    try {
+      var count = 0;
+      await for (final p in _cutParts(stream, partSize)) {
+        if (failure != null) break;
+        if (cancelToken != null && cancelToken.isCancelled) {
+          throw DioException(
+            requestOptions: RequestOptions(path: 'multipart-upload'),
+            type: DioExceptionType.cancel,
+            message: 'Request was cancelled',
+          );
+        }
+        if (++count > maxParts) {
+          throw _uploadError(
+            'more than $maxParts parts; use a larger partSize',
+          );
+        }
+        while (active.length >= concurrency) {
+          await Future.any(active);
+        }
+        late Future<void> task;
+        task = uploadPart(p)
+            .catchError((Object e, StackTrace st) {
+              failure ??= e;
+              failureStack ??= st;
+            })
+            .whenComplete(() => active.remove(task));
+        active.add(task);
+      }
+      await Future.wait(active);
+      if (failure != null) Error.throwWithStackTrace(failure!, failureStack!);
+      if (totalBytes == null) onProgress?.call(loaded, loaded);
+
+      final numbers = done.keys.toList()..sort();
+      return await _call('complete-multipart-upload', {
+        ...tokenFields,
+        'parts': [
+          for (final n in numbers) {'part_number': n, 'etag': done[n]},
+        ],
         'filename': filename,
-        'size': totalBytes,
-        if (folder != null) 'folder': folder,
-        if (collection != null) 'collection': collection,
-        if (visibility != null) 'visibility': visibility,
+        'visibility': vis,
+        if (folder != null) 'folder_id': folder,
         if (recordType != null) 'record_type': recordType,
-        if (recordId != null) 'record_id': recordId,
-      },
-    );
-
-    final uploadId = createRes['upload_id'];
-    final key = createRes['key'];
-
-    // In a minimal multipart flow, we complete with the uploadId
-    return api.rpc<Map<String, dynamic>>(
-      'complete-multipart-upload',
-      body: {'upload_id': uploadId, 'key': key, 'parts': <dynamic>[]},
-    );
+        if (recordId != null) 'record_id': recordId.toString(),
+        if (collection != null) 'collection_name': collection,
+        ...sharedFields(fields),
+      }, cancelToken);
+    } catch (_) {
+      // Best-effort cleanup; it never masks the original error.
+      try {
+        await _call('abort-multipart-upload', {
+          ...tokenFields,
+          'visibility': vis,
+        }, null).timeout(const Duration(seconds: 10));
+      } catch (_) {
+        // ignored
+      }
+      rethrow;
+    }
   }
 
   /// One JSON `POST sp_attachments/{rpcPrefix}/{fn}`; resolves the unwrapped data map.
@@ -401,4 +573,32 @@ class AttachmentsModule {
     final cleanBase = api.baseUrl.toString().replaceAll(RegExp(r'/+$'), '');
     return '$cleanBase/sp_attachments/rpc/$attachmentId/download';
   }
+}
+
+SpApiError _uploadError(String message) => SpApiError(
+  status: 0,
+  code: SpApiErrorCode.unencodableValue,
+  message: 'attachments.uploadMultipart: $message',
+);
+
+class _Part {
+  _Part(this.number, this.bytes);
+  final int number;
+  final Uint8List bytes;
+}
+
+/// Cuts [stream] into exact [size] parts; the last is smaller, and an empty
+/// stream gives one empty part.
+Stream<_Part> _cutParts(Stream<List<int>> stream, int size) async* {
+  final buf = BytesBuilder(copy: false);
+  var n = 0;
+  await for (final chunk in stream) {
+    buf.add(chunk);
+    while (buf.length >= size) {
+      final all = buf.takeBytes();
+      yield _Part(++n, Uint8List.sublistView(all, 0, size));
+      buf.add(Uint8List.sublistView(all, size));
+    }
+  }
+  if (buf.length > 0 || n == 0) yield _Part(++n, buf.takeBytes());
 }
