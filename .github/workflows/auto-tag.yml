@@ -33,9 +33,12 @@ jobs:
     env:
       RELEASE_TOKEN: ${{ secrets.RELEASE_TOKEN }}
     steps:
+      # persist-credentials: false keeps checkout from saving the read-only GITHUB_TOKEN as a git header: that header
+      # would win over RELEASE_TOKEN in the push URL below and the tag push would be denied.
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          persist-credentials: false
 
       - name: Decide
         id: v
