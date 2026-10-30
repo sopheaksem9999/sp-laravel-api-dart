@@ -1,0 +1,116 @@
+name: Auto tag
+
+# Dart packages publish from release.yml, and pub.dev only accepts a publish from a run that a PUSHED TAG started.
+# This workflow mints that tag. A push to main (a stable version) or develop (a pre-release version such as
+# 0.3.0-beta.1) whose pubspec.yaml version has no `v<version>` tag yet runs the checks, then creates and pushes the tag.
+# To release a version that is already on main, run it by hand: Actions > Auto tag > Run workflow, on main.
+#
+# One-time setup per repository:
+#   * Secret RELEASE_TOKEN: a fine-grained personal access token with "Contents: read and write" on this repository.
+#     The tag has to be pushed with it, not with GITHUB_TOKEN: events caused by GITHUB_TOKEN do not start other
+#     workflows, so release.yml would never run.
+#   * pub.dev: the package's Admin page > Automated publishing > GitHub Actions enabled for this repository,
+#     tag pattern v{{version}}.
+# Without RELEASE_TOKEN the job only warns and tags nothing. A tag is never moved or deleted (see AGENTS.md), so every
+# check that release.yml runs before it publishes also runs here, before the tag exists.
+
+on:
+  push:
+    branches: [main, develop]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: auto-tag-${{ github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  tag:
+    name: Tag the pubspec version
+    runs-on: ubuntu-latest
+    env:
+      RELEASE_TOKEN: ${{ secrets.RELEASE_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Decide
+        id: v
+        run: |
+          version=$(sed -n 's/^version:[[:space:]]*\([^[:space:]#]*\).*/\1/p' pubspec.yaml | head -1)
+          if [ -z "$version" ]; then
+            echo "::error::no version found in pubspec.yaml"
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          if [[ "$version" == *-* ]]; then want=develop; else want=main; fi
+          if [ "$GITHUB_REF_NAME" != "$want" ]; then
+            echo "::notice::$version is tagged from $want, not $GITHUB_REF_NAME. Skipping."
+            skip=true
+          elif git ls-remote --exit-code --tags origin "refs/tags/v$version" >/dev/null 2>&1; then
+            echo "::notice::v$version already exists. Skipping."
+            skip=true
+          elif [ -z "$RELEASE_TOKEN" ]; then
+            echo "::warning::v$version has no tag yet, but the RELEASE_TOKEN secret is not set, so nothing is tagged. See the header of .github/workflows/auto-tag.yml."
+            skip=true
+          else
+            skip=false
+          fi
+          echo "skip=$skip" >> "$GITHUB_OUTPUT"
+
+      - name: Install gitleaks 8.30.1 (checksum verified)
+        if: steps.v.outputs.skip == 'false'
+        run: |
+          curl -sSfL -o "$RUNNER_TEMP/gitleaks.tgz" https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_x64.tar.gz
+          echo "551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb  $RUNNER_TEMP/gitleaks.tgz" | sha256sum -c -
+          tar -xzf "$RUNNER_TEMP/gitleaks.tgz" -C "$RUNNER_TEMP" gitleaks
+
+      - name: Scan history and working tree
+        if: steps.v.outputs.skip == 'false'
+        run: |
+          "$RUNNER_TEMP/gitleaks" git . --config .gitleaks.toml --redact --no-banner --verbose --exit-code 1
+          "$RUNNER_TEMP/gitleaks" dir . --config .gitleaks.toml --redact --no-banner --verbose --exit-code 1
+
+      - uses: dart-lang/setup-dart@v1
+        if: steps.v.outputs.skip == 'false'
+        with:
+          sdk: stable
+
+      - name: Install dependencies
+        if: steps.v.outputs.skip == 'false'
+        run: dart pub get
+
+      - name: Verify formatting
+        if: steps.v.outputs.skip == 'false'
+        run: dart format --output=none --set-exit-if-changed .
+
+      - name: Analyze project
+        if: steps.v.outputs.skip == 'false'
+        run: dart analyze --fatal-infos
+
+      - name: Check forbidden imports and neutral names
+        if: steps.v.outputs.skip == 'false'
+        run: dart run tool/check.dart
+        env:
+          FORBIDDEN_NAMES: ${{ secrets.FORBIDDEN_NAMES }}
+
+      - name: Run tests
+        if: steps.v.outputs.skip == 'false'
+        run: dart test
+
+      - name: Dry-run the publish
+        if: steps.v.outputs.skip == 'false'
+        run: dart pub publish --dry-run
+
+      - name: Create and push the tag
+        if: steps.v.outputs.skip == 'false'
+        env:
+          VERSION: ${{ steps.v.outputs.version }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a "v$VERSION" -m "v$VERSION" "$GITHUB_SHA"
+          git push "https://x-access-token:${RELEASE_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" "refs/tags/v$VERSION"
