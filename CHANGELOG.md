@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- `AttachmentsModule.upload` sends the other fields the upload route validates: `recordType`, `recordId`, `collection` (the link), `folderId`, `title`, `caption`, `replaceOld` (replaces what is linked in the same collection of the record, deletes old files nothing else links to; needs a record), `tempTimeoutMinutes` / `tempTimeoutAt` (a `String` or a `DateTime`; the server drops the offset, so a UTC value is only right when the host's `app.timezone` is UTC) and, form upload only, `width`, `height`, `fit`, `sizeName` and `asTemp`. When the server would silently ignore or override an option the call throws `SpApiError(unencodableValue)` before any request (`asTemp: true` with a `private` / `public` visibility, a timeout without a temporary upload, both timeouts, `replaceOld` without a record, `sizeName` with `width` / `height` / `fit`, a `width` or `height` below 1); only a truthy flag counts, `asTemp: false` never throws. `visibility` is now nullable: when null the form still sends `private`, unless `asTemp` is true. The server's own ranges (width and height 10 to 3000, title length, timeout cap) are not copied: its 422 reports them.
+
 ## 0.2.0 (2026-10-28)
 
 - `debug` option that sends `X-Debug` (D3): `SpApi(debug: true)` adds `X-Debug: 1` to every request and `SpDebug.on()` / `SpDebug.merge(options)` do it for one request (every `TableGateway` method and `rpc`), asking the SERVER for lazy-loading diagnostics and error debug details. It logs nothing on the client (see `SpLog`). The header is added after the auth and tenant headers and before per-request headers, so an explicit per-request `X-Debug` (even `0`) wins. The default sends no header. New file: `lib/src/debug.dart`.

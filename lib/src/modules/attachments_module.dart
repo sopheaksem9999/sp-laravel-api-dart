@@ -2,6 +2,7 @@ import 'dart:typed_data';
 import 'package:dio/dio.dart';
 import '../api_core.dart';
 import '../errors.dart';
+import 'upload_fields.dart';
 
 /// Module for handling SP attachments, direct and multipart uploads, and URL helpers.
 class AttachmentsModule {
@@ -108,21 +109,87 @@ class AttachmentsModule {
   ///
   /// Exactly one of [bytes] or [filePath] is required. Returns the attachment
   /// record. For large files use [uploadMultipart].
+  ///
+  /// Besides the file the route takes: [recordType] and [recordId] (link the
+  /// new attachment), [collection] (link collection, `default` when omitted),
+  /// [folderId], [title], [caption], [replaceOld] (replaces what is linked in
+  /// the same [collection] of that record, deletes old files nothing else
+  /// links to, and needs [recordType] and [recordId]), [tempTimeoutMinutes] or
+  /// [tempTimeoutAt] (a `String` sent unchanged or a `DateTime` sent as UTC
+  /// ISO-8601; the server drops the offset, so a UTC value is only right when
+  /// the host's `app.timezone` is UTC; both only for a temporary upload) and,
+  /// form upload only, [width], [height], [fit] (`crop` or `contain`),
+  /// [sizeName] and [asTemp].
+  ///
+  /// When [visibility] is null the form sends `private`, unless [asTemp] is
+  /// true (then the host picks its temporary default). Throws
+  /// `SpApiError(unencodableValue)` before any request when the server would
+  /// silently ignore or override an option (for example [asTemp] with a
+  /// `private` visibility, a timeout without a temporary upload, [replaceOld]
+  /// without a record, [sizeName] with [width]). The server's own ranges are
+  /// not checked here: its 422 reports them.
   Future<Map<String, dynamic>> upload({
     List<int>? bytes,
     String? filePath,
     required String filename,
-    String visibility = 'private',
+    String? visibility,
+    String? recordType,
+    Object? recordId,
+    String? collection,
+    String? folderId,
+    bool? replaceOld,
+    String? title,
+    String? caption,
+    int? tempTimeoutMinutes,
+    Object? tempTimeoutAt,
+    int? width,
+    int? height,
+    String? fit,
+    String? sizeName,
+    bool? asTemp,
   }) async {
     if ((bytes == null) == (filePath == null)) {
       throw ArgumentError(
         'Provide exactly one of bytes or filePath to AttachmentsModule.upload.',
       );
     }
+    final fields = UploadFieldOptions(
+      visibility: visibility,
+      recordType: recordType,
+      recordId: recordId,
+      collection: collection,
+      folderId: folderId,
+      replaceOld: replaceOld,
+      title: title,
+      caption: caption,
+      tempTimeoutMinutes: tempTimeoutMinutes,
+      tempTimeoutAt: tempTimeoutAt,
+      width: width,
+      height: height,
+      fit: fit,
+      sizeName: sizeName,
+      asTemp: asTemp,
+    );
+    checkUploadFields(fields, UploadStrategy.form);
+
     final part = bytes != null
         ? MultipartFile.fromBytes(bytes, filename: filename)
         : await MultipartFile.fromFile(filePath!, filename: filename);
-    final form = FormData.fromMap({'file': part, 'visibility': visibility});
+    final form = FormData.fromMap({
+      'file': part,
+      if (visibility != null)
+        'visibility': visibility
+      else if (asTemp != true)
+        'visibility': 'private',
+      if (recordType != null) 'record_type': recordType,
+      if (recordId != null) 'record_id': recordId.toString(),
+      if (collection != null) 'collection_name': collection,
+      for (final e in {
+        ...sharedFields(fields),
+        ...formOnlyFields(fields),
+      }.entries)
+        e.key: e.value.toString(),
+    });
     final res = await api.request(
       'POST',
       _path(['upload']),

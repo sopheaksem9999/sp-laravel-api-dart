@@ -96,6 +96,129 @@ void main() {
     });
   });
 
+  group('AttachmentsModule.upload fields', () {
+    Map<String, String> fieldsOf(RequestOptions r) => {
+      for (final f in (r.data as FormData).fields) f.key: f.value,
+    };
+
+    test('sends w, h, fit as strings', () async {
+      await attachments.upload(
+        bytes: [1],
+        filename: 'a.png',
+        width: 512,
+        height: 256,
+        fit: 'crop',
+        visibility: 'public',
+      );
+      final f = fieldsOf(seen.single);
+      expect(f['w'], '512');
+      expect(f['h'], '256');
+      expect(f['fit'], 'crop');
+      expect(f['visibility'], 'public');
+    });
+
+    test('sends sizeName as size_name and no w or h', () async {
+      await attachments.upload(
+        bytes: [1],
+        filename: 'a.png',
+        sizeName: 'thumb',
+      );
+      final f = fieldsOf(seen.single);
+      expect(f['size_name'], 'thumb');
+      expect(f.containsKey('w'), isFalse);
+    });
+
+    test('sends replace_old true with record and collection', () async {
+      await attachments.upload(
+        bytes: [1],
+        filename: 'a.png',
+        recordType: 'products',
+        recordId: 7,
+        collection: 'gallery',
+        replaceOld: true,
+      );
+      final f = fieldsOf(seen.single);
+      expect(f['replace_old'], 'true');
+      expect(f['record_type'], 'products');
+      expect(f['record_id'], '7');
+      expect(f['collection_name'], 'gallery');
+    });
+
+    test('replaceOld false is not sent', () async {
+      await attachments.upload(
+        bytes: [1],
+        filename: 'a.png',
+        replaceOld: false,
+      );
+      expect(fieldsOf(seen.single).containsKey('replace_old'), isFalse);
+    });
+
+    test('sends title, caption and folderId as strings', () async {
+      await attachments.upload(
+        bytes: [1],
+        filename: 'a.png',
+        title: 'Logo',
+        caption: 'Our logo',
+        folderId: '12',
+      );
+      final f = fieldsOf(seen.single);
+      expect(f['title'], 'Logo');
+      expect(f['caption'], 'Our logo');
+      expect(f['folder_id'], '12');
+    });
+
+    test('asTemp true sends as_temp and no visibility', () async {
+      await attachments.upload(bytes: [1], filename: 'a.bin', asTemp: true);
+      final f = fieldsOf(seen.single);
+      expect(f['as_temp'], 'true');
+      expect(f.containsKey('visibility'), isFalse);
+    });
+
+    test('a temp timeout goes out with visibility temp_public', () async {
+      await attachments.upload(
+        bytes: [1],
+        filename: 'a.bin',
+        visibility: 'temp_public',
+        tempTimeoutMinutes: 90,
+      );
+      final f = fieldsOf(seen.single);
+      expect(f['temp_timeout_minutes'], '90');
+      expect(f['visibility'], 'temp_public');
+    });
+
+    test('tempTimeoutAt: a DateTime goes out as UTC ISO', () async {
+      await attachments.upload(
+        bytes: [1],
+        filename: 'a.bin',
+        asTemp: true,
+        tempTimeoutAt: DateTime.utc(2026, 10, 30, 10),
+      );
+      expect(
+        fieldsOf(seen.single)['temp_timeout_at'],
+        '2026-10-30T10:00:00.000Z',
+      );
+    });
+
+    test('a contradiction makes no request', () async {
+      await expectLater(
+        attachments.upload(
+          bytes: [1],
+          filename: 'a.bin',
+          asTemp: true,
+          visibility: 'private',
+        ),
+        throwsA(
+          isA<SpApiError>().having(
+            (e) => e.code,
+            'code',
+            SpApiErrorCode.unencodableValue,
+          ),
+        ),
+      );
+      expect(seen, isEmpty);
+    });
+  });
+
   group('AttachmentsModule.link / unlink', () {
     test('link posts attachment_id to the record path', () async {
       await attachments.link('invoices', 7, 'att_1');
