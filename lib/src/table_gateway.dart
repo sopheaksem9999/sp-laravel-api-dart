@@ -369,6 +369,11 @@ class TableGateway<T> {
 
   /// Fetches the last page of records by inverting the sort direction,
   /// then restoring the returned records back to canonical order.
+  ///
+  /// [sort] is required: the host's default sort depends on the table
+  /// (`created_at` when it has one, else the primary key), so the client
+  /// cannot know which order to invert. Without one this throws
+  /// `SpApiError(unencodableValue)` before any request.
   Future<CursorPage<T>> fetchLast({
     String? select,
     List<Filter> where = const [],
@@ -381,8 +386,16 @@ class TableGateway<T> {
     String? trashed,
     bool requireSelect = true,
   }) async {
-    final effectiveSort = sort ?? const Sort('id', Order.asc);
-    final reversedSort = effectiveSort.reversed();
+    if (sort == null) {
+      throw const SpApiError(
+        status: 0,
+        code: SpApiErrorCode.unencodableValue,
+        message:
+            'fetchLast needs a sort: the host\'s default sort depends on the '
+            'table, so the client cannot invert it',
+      );
+    }
+    final reversedSort = sort.reversed();
 
     final page = await list(
       select: select,
@@ -549,7 +562,8 @@ class CursorPagination<T> {
   );
 
   /// Fetches the last page of records by inverting sort direction,
-  /// then reversing items back to canonical order.
+  /// then reversing items back to canonical order. Needs a `sort` (see
+  /// [TableGateway.fetchLast]).
   Future<CursorPage<T>> lastPage() => table.fetchLast(
     select: select,
     where: where,

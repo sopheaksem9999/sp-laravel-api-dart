@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- **BREAKING:** `TableGateway.fetchLast` and `CursorPagination.lastPage` need a `sort` and throw `SpApiError(unencodableValue)` before any request without one. They used to assume `Sort('id', Order.asc)`, but the host's default sort depends on the table (`created_at` when it has one, else the primary key), so the old default could silently return the wrong rows. With a sort nothing changes: the sort is inverted for the request and the items are restored to canonical order. Pass the sort the list uses. Same behaviour as `lastPage` in `@sokpheak/sp-laravel-api`.
+
 - **BREAKING (fix):** the attachment ids, record ids, table names and the `rpcPrefix` that go into a request path are now guarded: an empty, `.` or `..` value throws `SpApiError(unencodableValue)` and nothing is sent (a URL parser would normalise it into a different route, and the call carries auth headers). Affects `viewBytes`, `link`, `unlink`, `getViewUrl` and `getDownloadUrl`; normal ids encode as before. Fix: `getViewUrl` and `getDownloadUrl` hard-coded `rpc` and ignored a custom `rpcPrefix`; they now use the client's prefix (an empty prefix drops the segment). With the default prefix the URLs are unchanged.
 
 - Added `serializeFilters`: the query parameters for `select`, `where`, `or`, `search`, `distinct`, `trashed` and `sort`, without any paging, for hosts that run their own list layer and set `per_page`, `cursor` and the rest themselves. It quotes values exactly like `serializeQuery`, never returns `per_page`, `page`, `cursor`, `direction`, `cursor_column` or `total`, and does not require `select`. `serializeQuery` is unchanged.

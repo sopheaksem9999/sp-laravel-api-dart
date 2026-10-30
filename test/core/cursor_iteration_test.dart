@@ -133,6 +133,66 @@ void main() {
       expect(seen.single.queryParameters['direction'], 'prev');
     });
 
+    test('fetchLast without a sort throws unencodableValue and makes no '
+        'request', () async {
+      final seen = <RequestOptions>[];
+      final g = _gateway(seen);
+      await expectLater(
+        g.fetchLast(select: 'id', perPage: 3),
+        throwsA(
+          isA<SpApiError>()
+              .having((e) => e.code, 'code', SpApiErrorCode.unencodableValue)
+              .having((e) => e.message, 'message', contains('sort')),
+        ),
+      );
+      expect(seen, isEmpty);
+    });
+
+    test('lastPage without a sort throws and makes no request', () async {
+      final seen = <RequestOptions>[];
+      final pagination = _gateway(
+        seen,
+      ).cursorPagination(select: 'id', perPage: 2);
+      await expectLater(
+        pagination.lastPage(),
+        throwsA(
+          isA<SpApiError>().having(
+            (e) => e.code,
+            'code',
+            SpApiErrorCode.unencodableValue,
+          ),
+        ),
+      );
+      expect(seen, isEmpty);
+    });
+
+    test(
+      'lastPage with a sort reverses it and restores canonical order',
+      () async {
+        final seen = <RequestOptions>[];
+        final g = _gateway(
+          seen,
+          responder: (_) => {
+            'data': [
+              {'id': 3},
+              {'id': 2},
+            ],
+            'meta': {'next_cursor': 'c1'},
+          },
+        );
+        final page = await g
+            .cursorPagination(
+              select: 'id',
+              perPage: 2,
+              sort: const Sort('id', Order.asc),
+            )
+            .lastPage();
+        expect(seen.single.queryParameters['sortby'], 'id');
+        expect(seen.single.queryParameters['order'], 'desc');
+        expect(page.items.map((i) => i.id), [2, 3]);
+      },
+    );
+
     test('fetchLast keeps prevCursor null on a single short page', () async {
       final seen = <RequestOptions>[];
       final g = _gateway(
@@ -144,7 +204,11 @@ void main() {
           'meta': {'next_cursor': 'c1'},
         },
       );
-      final page = await g.fetchLast(select: 'id', perPage: 3);
+      final page = await g.fetchLast(
+        select: 'id',
+        perPage: 3,
+        sort: const Sort('id', Order.asc),
+      );
       expect(seen.single.queryParameters['cursor'], '');
       expect(page.prevCursor, isNull);
       expect(page.items.map((i) => i.id), [1]);
@@ -161,7 +225,11 @@ void main() {
           'meta': {'next_cursor': 'c1'},
         },
       );
-      final page = await g.fetchLast(select: 'id', perPage: 2);
+      final page = await g.fetchLast(
+        select: 'id',
+        perPage: 2,
+        sort: const Sort('id', Order.asc),
+      );
       expect(page.prevCursor, 'c1');
     });
   });
